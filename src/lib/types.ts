@@ -76,3 +76,21 @@ export interface GuestScore {
   recommended_room: RoomName;
   offer: string;
 }
+
+export type OfferStatus = 'pending' | 'approved' | 'sent' | 'accepted' | 'rejected';
+
+export interface AIOffer {
+  id: string;
+  title: string;
+  sessionsIncluded: number;
+  roomsIncluded: string[];
+  reason: string;
+  confidenceScore: number;
+  status: OfferStatus;
+}
+
+export interface GuestWithOffer extends Guest {
+  fullName: string;
+  company: string;
+  generatedOffer: AIOffer;
+}

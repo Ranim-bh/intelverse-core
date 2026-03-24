@@ -10,6 +10,7 @@ import AntiChurn from "./pages/AntiChurn";
 import Analytics from "./pages/Analytics";
 import GuestDetail from "./pages/GuestDetail";
 import NotFound from "./pages/NotFound";
+import AIOffers from "./pages/AIOffers";
 
 const queryClient = new QueryClient();
 
@@ -26,6 +27,7 @@ const App = () => (
             <Route path="/partners" element={<Partners />} />
             <Route path="/anti-churn" element={<AntiChurn />} />
             <Route path="/analytics" element={<Analytics />} />
+            <Route path="/ai-offers" element={<AIOffers />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Layout>

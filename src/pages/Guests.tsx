@@ -9,6 +9,7 @@ import { Search, Filter, Sparkles, X, Send, ChevronRight } from "lucide-react";
 const statusSteps = ['Créé', 'Lobby', 'KPIs collectés', 'Offre envoyée', 'Converti'] as const;
 
 export default function Guests() {
+  const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [filterType, setFilterType] = useState<string>("all");
   const [selectedGuest, setSelectedGuest] = useState<Guest | null>(null);

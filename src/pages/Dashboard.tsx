@@ -87,12 +87,12 @@ export default function Dashboard() {
           <h3 className="text-sm font-semibold text-foreground mb-4">MRR — Évolution 6 mois</h3>
           <ResponsiveContainer width="100%" height={200}>
             <LineChart data={businessMetrics}>
-              <CartesianGrid strokeDasharray="3 3" stroke="hsl(215 25% 22%)" />
-              <XAxis dataKey="month" tick={{ fontSize: 11, fill: 'hsl(215 20% 65%)' }} axisLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: 'hsl(215 20% 65%)' }} axisLine={false} tickFormatter={v => `€${v / 1000}k`} />
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(195 22% 84%)" />
+              <XAxis dataKey="month" tick={{ fontSize: 11, fill: 'hsl(195 22% 38%)' }} axisLine={false} />
+              <YAxis tick={{ fontSize: 11, fill: 'hsl(195 22% 38%)' }} axisLine={false} tickFormatter={v => `€${v / 1000}k`} />
               <Tooltip
-                contentStyle={{ backgroundColor: 'hsl(217 33% 17%)', border: '1px solid hsl(215 25% 27%)', borderRadius: '8px', fontSize: '12px' }}
-                labelStyle={{ color: 'hsl(210 40% 96%)' }}
+                contentStyle={{ backgroundColor: 'hsl(0 0% 100%)', border: '1px solid hsl(195 22% 84%)', borderRadius: '8px', fontSize: '12px' }}
+                labelStyle={{ color: 'hsl(195 60% 11%)' }}
                 itemStyle={{ color: '#06B6D4' }}
                 formatter={(value: number) => [`€${value.toLocaleString()}`, 'MRR']}
               />

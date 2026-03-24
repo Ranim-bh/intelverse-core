@@ -6,62 +6,62 @@
 
 @layer base {
   :root {
-    --background: 222 47% 11%;
-    --foreground: 210 40% 96%;
+    --background: 210 8% 96%;
+    --foreground: 195 60% 11%;
 
-    --card: 217 33% 17%;
-    --card-foreground: 210 40% 96%;
+    --card: 0 0% 100%;
+    --card-foreground: 195 60% 11%;
 
-    --popover: 217 33% 17%;
-    --popover-foreground: 210 40% 96%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 195 60% 11%;
 
-    --primary: 187 72% 43%;
-    --primary-foreground: 222 47% 11%;
+    --primary: 183 82% 40%;
+    --primary-foreground: 0 0% 100%;
 
-    --secondary: 217 33% 17%;
-    --secondary-foreground: 210 40% 96%;
+    --secondary: 210 12% 92%;
+    --secondary-foreground: 195 60% 11%;
 
-    --muted: 215 25% 22%;
-    --muted-foreground: 215 20% 65%;
+    --muted: 210 14% 92%;
+    --muted-foreground: 195 22% 38%;
 
-    --accent: 187 72% 43%;
-    --accent-foreground: 222 47% 11%;
+    --accent: 183 58% 88%;
+    --accent-foreground: 195 60% 11%;
 
-    --destructive: 0 84% 60%;
+    --destructive: 0 82% 46%;
     --destructive-foreground: 210 40% 98%;
 
-    --success: 160 60% 45%;
+    --success: 167 72% 35%;
     --success-foreground: 210 40% 98%;
 
-    --warning: 38 92% 63%;
-    --warning-foreground: 222 47% 11%;
+    --warning: 2 89% 52%;
+    --warning-foreground: 210 40% 98%;
 
-    --border: 215 25% 27%;
-    --input: 215 25% 27%;
-    --ring: 187 72% 43%;
+    --border: 195 22% 84%;
+    --input: 195 22% 84%;
+    --ring: 183 82% 40%;
 
     --radius: 0.75rem;
 
-    --sidebar-background: 222 47% 8%;
-    --sidebar-foreground: 210 40% 96%;
-    --sidebar-primary: 187 72% 43%;
-    --sidebar-primary-foreground: 222 47% 11%;
-    --sidebar-accent: 215 25% 15%;
-    --sidebar-accent-foreground: 210 40% 96%;
-    --sidebar-border: 215 25% 20%;
-    --sidebar-ring: 187 72% 43%;
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 195 60% 11%;
+    --sidebar-primary: 183 82% 40%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 210 12% 94%;
+    --sidebar-accent-foreground: 195 60% 11%;
+    --sidebar-border: 195 22% 86%;
+    --sidebar-ring: 183 82% 40%;
 
     /* Room colors */
-    --room-training: 217 91% 60%;
-    --room-showcase: 258 90% 66%;
-    --room-opportunity: 160 60% 45%;
-    --room-pitch: 38 92% 63%;
+    --room-training: 199 84% 46%;
+    --room-showcase: 183 82% 40%;
+    --room-opportunity: 167 72% 35%;
+    --room-pitch: 0 82% 46%;
 
     /* Risk colors */
     --risk-low: 160 60% 45%;
-    --risk-medium: 38 92% 63%;
-    --risk-high: 24 94% 53%;
-    --risk-critical: 0 84% 60%;
+    --risk-medium: 9 84% 56%;
+    --risk-high: 2 89% 52%;
+    --risk-critical: 0 75% 42%;
   }
 }
 
@@ -72,6 +72,7 @@
 
   body {
     @apply bg-background text-foreground font-sans antialiased;
+    background-image: linear-gradient(180deg, hsl(210 8% 98%) 0%, hsl(210 8% 95%) 100%);
   }
 }
 
@@ -81,7 +82,7 @@
   }
 
   .glass-card {
-    @apply bg-card/80 backdrop-blur-sm border border-border rounded-xl;
+    @apply bg-card border border-border rounded-xl shadow-sm;
   }
 
   @keyframes count-up {

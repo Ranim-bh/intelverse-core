@@ -12,7 +12,7 @@ const statusColors: Record<string, string> = {
   pending:  'bg-yellow-100 text-yellow-700 border-yellow-200',
   approved: 'bg-green-100 text-green-700 border-green-200',
   sent:     'bg-blue-100 text-blue-700 border-blue-200',
-  accepted: 'bg-indigo-100 text-indigo-700 border-indigo-200',
+  accepted: 'bg-red-100 text-red-700 border-red-200',
   rejected: 'bg-red-100 text-red-700 border-red-200',
 };
 
@@ -77,7 +77,7 @@ export default function Guests() {
                 <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Nom</th>
                 <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Type</th>
                 <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Session</th>
-                <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Room Vue</th>
+                <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Domaine</th>
                 <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Score IA</th>
                 <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Room Recommandée</th>
                 <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Statut</th>
@@ -101,7 +101,7 @@ export default function Guests() {
                       <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">{guest.type_client}</span>
                     </td>
                     <td className="p-4 font-mono text-xs">{guest.session_duration} min</td>
-                    <td className="p-4 text-xs">{guest.most_viewed_room}</td>
+                    <td className="p-4 text-xs">{guest.domain}</td>
                     <td className="p-4">
                       <span className={`font-mono font-bold text-sm px-2 py-0.5 rounded ${getScoreBgColor(analysis.level)}`}>
                         {analysis.score}
@@ -172,7 +172,7 @@ export default function Guests() {
               ]}>
                 <XAxis dataKey="name" tick={{ fontSize: 10, fill: 'hsl(215 20% 65%)' }} axisLine={false} />
                 <YAxis tick={{ fontSize: 10, fill: 'hsl(215 20% 65%)' }} axisLine={false} />
-                <Tooltip contentStyle={{ backgroundColor: 'hsl(217 33% 17%)', border: '1px solid hsl(215 25% 27%)', borderRadius: '8px', fontSize: '12px' }} />
+                <Tooltip contentStyle={{ backgroundColor: 'hsl(0 0% 100%)', border: '1px solid hsl(195 22% 84%)', borderRadius: '8px', fontSize: '12px' }} />
                 <Bar dataKey="value" radius={[6, 6, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
@@ -186,7 +186,7 @@ export default function Guests() {
           <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden animate-slide-up" onClick={e => e.stopPropagation()}>
 
             {/* Header gradient */}
-            <div className="bg-gradient-to-r from-indigo-600 to-violet-600 p-6">
+            <div className="bg-gradient-to-r from-primary to-warning p-6">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center">
@@ -194,7 +194,7 @@ export default function Guests() {
                   </div>
                   <div>
                     <h3 className="font-bold text-white text-base">Pack IA Généré</h3>
-                    <p className="text-indigo-200 text-xs">Offre personnalisée pour ce client</p>
+                    <p className="text-red-100 text-xs">Offre personnalisée pour ce client</p>
                   </div>
                 </div>
                 <button onClick={() => setOfferModal(null)} className="text-white/70 hover:text-white transition-colors">
@@ -219,12 +219,12 @@ export default function Guests() {
                 </div>
 
                 {/* Pack title */}
-                <div className="bg-indigo-50 rounded-xl p-4 border border-indigo-100">
+                <div className="bg-red-50 rounded-xl p-4 border border-red-100">
                   <div className="flex items-center gap-2 mb-1">
-                    <Package className="h-4 w-4 text-indigo-500" />
-                    <p className="text-[10px] font-bold text-indigo-400 uppercase">Nom du Pack</p>
+                    <Package className="h-4 w-4 text-red-600" />
+                    <p className="text-[10px] font-bold text-red-500 uppercase">Nom du Pack</p>
                   </div>
-                  <p className="text-lg font-black text-indigo-900">{offerModal.aiGuest.generatedOffer.title}</p>
+                  <p className="text-lg font-black text-red-900">{offerModal.aiGuest.generatedOffer.title}</p>
                 </div>
 
                 {/* Sessions + Rooms */}
@@ -237,7 +237,7 @@ export default function Guests() {
                     <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">Rooms incluses</p>
                     <div className="flex flex-wrap gap-1.5">
                       {offerModal.aiGuest.generatedOffer.roomsIncluded.map((room, idx) => (
-                        <span key={idx} className="flex items-center gap-1 px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded text-[10px] font-medium">
+                        <span key={idx} className="flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-medium">
                           <Layers className="h-2.5 w-2.5" />
                           {room}
                         </span>
@@ -247,12 +247,12 @@ export default function Guests() {
                 </div>
 
                 {/* AI Reason */}
-                <div className="bg-violet-50 rounded-xl p-4 border border-violet-100">
+                <div className="bg-red-50 rounded-xl p-4 border border-red-100">
                   <div className="flex items-center gap-2 mb-2">
-                    <Brain className="h-4 w-4 text-violet-500" />
-                    <p className="text-[10px] font-bold text-violet-400 uppercase">Raisonnement IA</p>
+                    <Brain className="h-4 w-4 text-red-600" />
+                    <p className="text-[10px] font-bold text-red-500 uppercase">Raisonnement IA</p>
                   </div>
-                  <p className="text-xs text-violet-800 italic leading-relaxed">"{offerModal.aiGuest.generatedOffer.reason}"</p>
+                  <p className="text-xs text-red-800 italic leading-relaxed">"{offerModal.aiGuest.generatedOffer.reason}"</p>
                 </div>
 
                 {/* Confidence score */}
@@ -265,14 +265,14 @@ export default function Guests() {
                   </div>
                   <div className="w-32 bg-slate-100 rounded-full h-2.5">
                     <div
-                      className="h-2.5 rounded-full bg-gradient-to-r from-indigo-500 to-violet-500"
+                      className="h-2.5 rounded-full bg-gradient-to-r from-primary to-warning"
                       style={{ width: `${offerModal.aiGuest.generatedOffer.confidenceScore}%` }}
                     />
                   </div>
                 </div>
 
                 {/* CTA */}
-                <button className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl py-3 text-sm font-bold transition-colors shadow-sm shadow-indigo-200">
+                <button className="w-full flex items-center justify-center gap-2 bg-primary hover:opacity-90 text-primary-foreground rounded-xl py-3 text-sm font-bold transition-colors shadow-sm">
                   <Send className="h-4 w-4" />
                   Envoyer l'offre via Chatbot
                 </button>
@@ -292,7 +292,7 @@ export default function Guests() {
                 <div className="bg-slate-50 rounded-lg p-4 border border-slate-100">
                   <p className="text-sm text-slate-700 leading-relaxed">{offerModal.analysis.offer}</p>
                 </div>
-                <button className="w-full flex items-center justify-center gap-2 bg-indigo-600 text-white rounded-xl py-3 text-sm font-bold hover:bg-indigo-700 transition-colors">
+                <button className="w-full flex items-center justify-center gap-2 bg-primary text-primary-foreground rounded-xl py-3 text-sm font-bold hover:opacity-90 transition-colors">
                   <Send className="h-4 w-4" />
                   Envoyer via Chatbot
                 </button>

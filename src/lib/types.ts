@@ -9,9 +9,11 @@ export interface Guest {
   id: string;
   name: string;
   type_client: ClientType;
+  domain: string;
   session_duration: number;
   room_observation_time: Record<string, number>;
   room_click_rate: Record<string, number>;
+  navigation_path: string[];
   rooms_viewed: string[];
   interaction_count: number;
   most_viewed_room: string;

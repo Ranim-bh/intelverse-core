@@ -26,8 +26,6 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  BarChart,
-  Bar,
   Cell,
   PieChart,
   Pie,
@@ -55,10 +53,26 @@ const StatCard = ({ icon: Icon, label, value, subValue, color }: {
 // Derive extra data from our Guest type
 function deriveGuestData(guest: Guest) {
   const analysis = analyzeGuest(guest);
-  const showcaseVisits = guest.room_observation_time["Showcase Room"] || 0;
-  const opportunityVisits = guest.room_observation_time["Opportunity Room"] || 0;
-  const pitchVisits = guest.room_observation_time["Pitch Room"] || 0;
-  const trainingVisits = guest.room_observation_time["Training Center"] || 0;
+  const navigationBasedVisits = guest.navigation_path.reduce<Record<string, number>>((acc, step) => {
+    if (step === "Showcase Room" || step === "Opportunity Room" || step === "Pitch Room" || step === "Training Center") {
+      acc[step] = (acc[step] || 0) + 1;
+    }
+    return acc;
+  }, {});
+
+  const hasNavigationRoomVisits = Object.keys(navigationBasedVisits).length > 0;
+  const showcaseVisits = hasNavigationRoomVisits
+    ? navigationBasedVisits["Showcase Room"] || 0
+    : guest.room_observation_time["Showcase Room"] || 0;
+  const opportunityVisits = hasNavigationRoomVisits
+    ? navigationBasedVisits["Opportunity Room"] || 0
+    : guest.room_observation_time["Opportunity Room"] || 0;
+  const pitchVisits = hasNavigationRoomVisits
+    ? navigationBasedVisits["Pitch Room"] || 0
+    : guest.room_observation_time["Pitch Room"] || 0;
+  const trainingVisits = hasNavigationRoomVisits
+    ? navigationBasedVisits["Training Center"] || 0
+    : guest.room_observation_time["Training Center"] || 0;
 
   const activityHistory = [
     { date: "Sem 1", interactions: Math.round(guest.interaction_count * 0.15) },
@@ -100,14 +114,6 @@ function deriveGuestData(guest: Guest) {
   };
 }
 
-const statusColorMap: Record<string, string> = {
-  Créé: "bg-blue-50 text-blue-600 border-blue-100",
-  Lobby: "bg-slate-50 text-slate-500 border-slate-100",
-  "KPIs collectés": "bg-orange-50 text-orange-600 border-orange-100",
-  "Offre envoyée": "bg-indigo-50 text-indigo-600 border-indigo-100",
-  Converti: "bg-emerald-50 text-emerald-600 border-emerald-100",
-};
-
 export default function GuestDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -117,7 +123,7 @@ export default function GuestDetail() {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
         <p className="text-slate-500">Guest introuvable</p>
-        <button onClick={() => navigate("/guests")} className="text-indigo-600 text-sm hover:underline">
+        <button onClick={() => navigate("/guests")} className="text-primary text-sm hover:underline">
           ← Retour aux guests
         </button>
       </div>
@@ -143,7 +149,7 @@ export default function GuestDetail() {
     { name: "Training", value: trainingVisits },
   ].filter((d) => d.value > 0);
 
-  const COLORS = ["#6366f1", "#10b981", "#f59e0b", "#3b82f6"];
+  const COLORS = ["#0ea5a8", "#0f766e", "#ef4444", "#0891b2"];
 
   return (
     <motion.div
@@ -166,7 +172,7 @@ export default function GuestDetail() {
           <button className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors">
             Modifier Profil
           </button>
-          <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors shadow-sm shadow-indigo-200">
+          <button className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90 transition-colors shadow-sm">
             Envoyer Offre
           </button>
         </div>
@@ -175,14 +181,14 @@ export default function GuestDetail() {
       {/* Profile Summary */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-8">
         <div className="flex flex-col md:flex-row gap-8 items-start">
-          <div className="w-24 h-24 rounded-2xl bg-indigo-600 flex items-center justify-center text-white text-3xl font-bold shrink-0">
+          <div className="w-24 h-24 rounded-2xl bg-primary flex items-center justify-center text-primary-foreground text-3xl font-bold shrink-0">
             {guest.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
           </div>
           <div className="flex-1 space-y-4">
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-3xl font-bold text-slate-900">{guest.name}</h1>
-              <span className={cn("px-3 py-1 rounded-full text-xs font-semibold border", statusColorMap[guest.status] || "bg-slate-50 text-slate-500 border-slate-100")}>
-                {guest.status}
+              <span className="px-3 py-1 rounded-full text-xs font-semibold border bg-accent text-accent-foreground border-border">
+                {guest.domain}
               </span>
               {analysis.level === "hot" && (
                 <span className="flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold bg-rose-500 text-white">
@@ -233,13 +239,12 @@ export default function GuestDetail() {
       {/* KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard icon={Activity} label="Score IA" value={analysis.score} subValue="/100" color="bg-blue-50 text-blue-600" />
-        <StatCard icon={Clock} label="Session" value={`${guest.session_duration}m`} subValue="durée totale" color="bg-indigo-50 text-indigo-600" />
+        <StatCard icon={Clock} label="Session" value={`${guest.session_duration}m`} subValue="durée totale" color="bg-red-50 text-red-700" />
         <StatCard icon={MessageSquare} label="Interactions" value={guest.interaction_count} subValue="actions" color="bg-emerald-50 text-emerald-600" />
         <StatCard icon={Mic} label="Voice Usage" value={guest.voice_interaction_time} subValue="min" color="bg-orange-50 text-orange-600" />
-        <StatCard icon={DoorOpen} label="Rooms Visitées" value={guest.rooms_viewed.length} subValue="rooms" color="bg-rose-50 text-rose-600" />
-        <StatCard icon={Building2} label="Showcase" value={showcaseVisits} subValue="min" color="bg-violet-50 text-violet-600" />
+        <StatCard icon={Building2} label="Showcase" value={showcaseVisits} subValue="min" color="bg-teal-50 text-teal-700" />
         <StatCard icon={Zap} label="Opportunity" value={opportunityVisits} subValue="min" color="bg-amber-50 text-amber-600" />
-        <StatCard icon={TrendingUp} label="Conversion Prob." value={`${conversionProbability}%`} subValue="probabilité" color="bg-cyan-50 text-cyan-600" />
+        <StatCard icon={TrendingUp} label="Conversion Prob." value={`${conversionProbability}%`} subValue="probabilité" color="bg-red-50 text-red-600" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -252,23 +257,23 @@ export default function GuestDetail() {
                 <AreaChart data={activityHistory}>
                   <defs>
                     <linearGradient id="colorInteractions" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#6366f1" stopOpacity={0.1} />
-                      <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
+                      <stop offset="5%" stopColor="#0ea5a8" stopOpacity={0.12} />
+                      <stop offset="95%" stopColor="#0ea5a8" stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                   <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "#64748b" }} />
                   <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "#64748b" }} />
                   <Tooltip contentStyle={{ borderRadius: "12px", border: "none", boxShadow: "0 10px 15px -3px rgb(0 0 0 / 0.1)" }} />
-                  <Area type="monotone" dataKey="interactions" stroke="#6366f1" strokeWidth={3} fillOpacity={1} fill="url(#colorInteractions)" />
+                  <Area type="monotone" dataKey="interactions" stroke="#0ea5a8" strokeWidth={3} fillOpacity={1} fill="url(#colorInteractions)" />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+          <div className="grid grid-cols-1 gap-8">
             <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-              <h3 className="text-lg font-bold text-slate-900 mb-6">Room Activity</h3>
+              <h3 className="text-lg font-bold text-slate-900 mb-6">Room Observation</h3>
               <div className="h-64 w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
@@ -292,25 +297,18 @@ export default function GuestDetail() {
             </div>
 
             <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-              <h3 className="text-lg font-bold text-slate-900 mb-6">Voice vs Text</h3>
-              <div className="h-64 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={[
-                      { name: "Voice", value: guest.voice_interaction_time },
-                      { name: "Text/Other", value: Math.max(0, guest.interaction_count - guest.voice_interaction_time) },
-                    ]}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="name" axisLine={false} tickLine={false} />
-                    <YAxis axisLine={false} tickLine={false} />
-                    <Tooltip />
-                    <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                      <Cell fill="#f59e0b" />
-                      <Cell fill="#6366f1" />
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
+              <h3 className="text-lg font-bold text-slate-900 mb-6">Navigation Path</h3>
+              <div className="flex flex-wrap items-center gap-2">
+                {guest.navigation_path.map((step, index) => (
+                  <div key={`${step}-${index}`} className="flex items-center gap-2">
+                    <span className="px-3 py-1.5 rounded-full text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
+                      {step}
+                    </span>
+                    {index < guest.navigation_path.length - 1 && (
+                      <ChevronRight size={14} className="text-slate-400" />
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           </div>
@@ -321,13 +319,13 @@ export default function GuestDetail() {
           {/* AI Insights */}
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
             <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
-              <TrendingUp size={20} className="text-indigo-600" />
+              <TrendingUp size={20} className="text-primary" />
               AI Insights
             </h3>
             <div className="space-y-4">
               {aiInsights.map((insight, idx) => (
                 <div key={idx} className="flex gap-4 p-3 rounded-xl hover:bg-slate-50 transition-colors">
-                  <div className="p-2 rounded-lg shrink-0 h-fit bg-indigo-50 text-indigo-600">
+                  <div className="p-2 rounded-lg shrink-0 h-fit bg-red-50 text-red-700">
                     <Activity size={18} />
                   </div>
                   <p className="text-sm text-slate-700 leading-relaxed">{insight}</p>
@@ -340,13 +338,13 @@ export default function GuestDetail() {
           </div>
 
           {/* Admin Notes */}
-          <div className="bg-indigo-900 text-white p-6 rounded-2xl shadow-lg shadow-indigo-200">
+          <div className="bg-slate-900 text-white p-6 rounded-2xl shadow-lg shadow-slate-200">
             <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
               <MessageSquare size={20} />
               Admin Notes
             </h3>
-            <div className="bg-indigo-800/50 p-4 rounded-xl mb-4">
-              <p className="text-sm text-indigo-100 italic leading-relaxed">
+            <div className="bg-slate-800/50 p-4 rounded-xl mb-4">
+              <p className="text-sm text-slate-100 italic leading-relaxed">
                 "Aucune note ajoutée pour le moment."
               </p>
             </div>
@@ -368,7 +366,7 @@ export default function GuestDetail() {
                     <span className="text-sm font-bold">Contacter Maintenant</span>
                     <ChevronRight size={16} className="group-hover:translate-x-1 transition-transform" />
                   </button>
-                  <button className="w-full flex items-center justify-between p-3 rounded-xl bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors group">
+                  <button className="w-full flex items-center justify-between p-3 rounded-xl bg-red-50 text-red-700 hover:bg-red-100 transition-colors group">
                     <span className="text-sm font-bold">Envoyer Offre Personnalisée</span>
                     <ChevronRight size={16} className="group-hover:translate-x-1 transition-transform" />
                   </button>
@@ -398,7 +396,7 @@ export default function GuestDetail() {
                 <span className="px-2 py-0.5 bg-white border border-slate-200 rounded text-[10px] font-bold text-slate-500 uppercase">
                   {generatedOffer.status}
                 </span>
-                <button className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-md transition-all">
+                <button className="p-1.5 text-slate-400 hover:text-primary hover:bg-white rounded-md transition-all">
                   <Edit3 size={14} />
                 </button>
               </div>
@@ -416,16 +414,16 @@ export default function GuestDetail() {
                 <p className="text-xs font-bold text-slate-400 uppercase mb-2">Included Rooms</p>
                 <div className="flex flex-wrap gap-2">
                   {generatedOffer.roomsIncluded.map((room, idx) => (
-                    <span key={idx} className="px-2 py-1 bg-indigo-50 text-indigo-600 rounded text-[10px] font-medium">
+                    <span key={idx} className="px-2 py-1 bg-red-50 text-red-700 rounded text-[10px] font-medium">
                       {room}
                     </span>
                   ))}
                 </div>
               </div>
 
-              <div className="p-3 bg-indigo-50 rounded-lg border border-indigo-100">
-                <p className="text-[10px] font-bold text-indigo-400 uppercase mb-1">AI Reason</p>
-                <p className="text-xs text-indigo-700 italic">"{generatedOffer.reason}"</p>
+              <div className="p-3 bg-red-50 rounded-lg border border-red-100">
+                <p className="text-[10px] font-bold text-red-500 uppercase mb-1">AI Reason</p>
+                <p className="text-xs text-red-800 italic">"{generatedOffer.reason}"</p>
               </div>
             </div>
 

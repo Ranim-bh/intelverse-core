@@ -43,12 +43,12 @@ export function AppSidebar() {
     <Sidebar collapsible="icon">
       <SidebarHeader className="p-4">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center shrink-0">
-            <span className="text-primary-foreground font-bold text-sm">IV</span>
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-warning via-primary to-room-training flex items-center justify-center shrink-0 shadow-sm">
+            <span className="text-primary-foreground font-bold text-[10px] tracking-wider">TV</span>
           </div>
           {!collapsed && (
             <div>
-              <h1 className="font-semibold text-sm text-sidebar-foreground">IntelVerse</h1>
+              <h1 className="font-semibold text-sm text-sidebar-foreground tracking-[0.08em]">TALENT VERSE</h1>
               <p className="text-[10px] text-muted-foreground">Intelligence Platform</p>
             </div>
           )}

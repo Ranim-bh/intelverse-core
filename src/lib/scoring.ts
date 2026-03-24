@@ -64,25 +64,36 @@ export function getScoreBgColor(level: 'hot' | 'warm' | 'cold'): string {
   }
 }
 
-// ─── Room Recommendation ───
+// ─── Room Recommendation (plusieurs rooms) ───
+// Retourne toutes les rooms pertinentes triées par temps d observation
+export function recommendRooms(guest: Guest): RoomName[] {
+  const ALL_ROOMS: RoomName[] = ['Training Center', 'Showcase Room', 'Opportunity Room', 'Pitch Room'];
+
+  // Calculer un score d interet par room basé sur observation + clics
+  const roomScores: Record<string, number> = {};
+  for (const room of ALL_ROOMS) {
+    const obsTime = guest.room_observation_time[room] || 0;
+    const clicks  = guest.room_click_rate[room] || 0;
+    roomScores[room] = obsTime * 0.6 + clicks * 0.4;
+  }
+
+  // Garder seulement les rooms que le guest a visitées
+  const visitedRooms = ALL_ROOMS.filter(r => guest.rooms_viewed.includes(r));
+
+  // Si aucune room visitée, fallback Training Center
+  if (visitedRooms.length === 0) return ['Training Center'];
+
+  // Trier par score d interet décroissant
+  const sorted = visitedRooms.sort((a, b) => roomScores[b] - roomScores[a]);
+
+  // Garder les rooms avec un score > 0, ou au minimum la meilleure
+  const significant = sorted.filter(r => roomScores[r] > 0);
+  return significant.length > 0 ? significant : [sorted[0]];
+}
+
+// Compatibilité : retourne seulement la meilleure room
 export function recommendRoom(guest: Guest): RoomName {
-  if (guest.voice_interaction_time > 2 && guest.interaction_count > 20) {
-    return 'Pitch Room';
-  }
-  if (guest.rooms_viewed.length >= 3 && guest.session_duration > 15) {
-    return 'Showcase Room';
-  }
-  const mostViewed = guest.most_viewed_room.toLowerCase();
-  if ((mostViewed.includes('opportunity') || mostViewed.includes('pro')) &&
-      (guest.room_observation_time[guest.most_viewed_room] || 0) > 5) {
-    return 'Opportunity Room';
-  }
-  if (guest.session_duration < 5 && guest.idle_time > 2) {
-    return 'Training Center';
-  }
-  return guest.session_duration > 10 && guest.interaction_count < 15
-    ? 'Showcase Room'
-    : 'Training Center';
+  return recommendRooms(guest)[0];
 }
 
 // ─── Generate Guest Offer ───
@@ -100,9 +111,10 @@ export function generateGuestOffer(guest: Guest, room: RoomName): string {
 export function analyzeGuest(guest: Guest): GuestScore {
   const score = calculateGuestScore(guest);
   const level = getScoreLevel(score);
-  const recommended_room = recommendRoom(guest);
+  const recommended_rooms = recommendRooms(guest);
+  const recommended_room = recommended_rooms[0];
   const offer = generateGuestOffer(guest, recommended_room);
-  return { score, level, recommended_room, offer };
+  return { score, level, recommended_room, recommended_rooms, offer };
 }
 
 // ─── Upselling Recommendation ───

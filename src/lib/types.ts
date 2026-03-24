@@ -75,7 +75,8 @@ export interface ChurnProfile {
 export interface GuestScore {
   score: number;
   level: 'hot' | 'warm' | 'cold';
-  recommended_room: RoomName;
+  recommended_room: RoomName;       // room principale (compatibilité)
+  recommended_rooms: RoomName[];    // toutes les rooms recommandées
   offer: string;
 }
 

@@ -108,9 +108,13 @@ export default function Guests() {
                       </span>
                     </td>
                     <td className="p-4">
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${getRoomColor(analysis.recommended_room)}`}>
-                        {analysis.recommended_room}
-                      </span>
+                      <div className="flex flex-wrap gap-1">
+                        {analysis.recommended_rooms.map((room) => (
+                          <span key={room} className={`text-xs px-2 py-0.5 rounded-full font-medium ${getRoomColor(room)}`}>
+                            {room}
+                          </span>
+                        ))}
+                      </div>
                     </td>
                     <td className="p-4">
                       <span className={`text-xs px-2 py-0.5 rounded-full ${guest.status === 'Converti' ? 'bg-success/20 text-success' : 'bg-muted text-muted-foreground'}`}>

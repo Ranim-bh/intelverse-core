@@ -3,6 +3,7 @@ import { AIOffer, GuestWithOffer } from '../lib/types';
 import { Edit3, Activity } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { MOCK_GUESTS } from '../lib/mock-data';
+import { getOfferStatusBadgeClasses, getOfferStatusLabel } from '../lib/offer-status';
 
 interface PackageManagementProps {
   packages?: AIOffer[];
@@ -26,8 +27,8 @@ export const PackageManagement = ({ packages }: PackageManagementProps) => {
           <div key={guest.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
             <div className="p-6 border-b border-slate-100 bg-slate-50/50">
               <div className="flex items-center justify-between mb-2">
-                <span className="px-2 py-0.5 bg-white border border-slate-200 rounded text-[10px] font-bold text-slate-500 uppercase">
-                  {guest.generatedOffer.status}
+                <span className={`px-2 py-0.5 rounded text-[10px] leading-[13px] font-bold border ${getOfferStatusBadgeClasses(guest.generatedOffer.status)}`}>
+                  {getOfferStatusLabel(guest.generatedOffer.status)}
                 </span>
                 <div className="flex gap-1">
                   <button className="p-1.5 text-slate-400 hover:text-primary hover:bg-white rounded-md transition-all">

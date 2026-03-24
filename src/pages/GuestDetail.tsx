@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { guests } from "@/lib/mock-data";
+import { guests, MOCK_GUESTS } from "@/lib/mock-data";
 import { analyzeGuest } from "@/lib/scoring";
 import {
   ArrowLeft,
@@ -31,7 +31,8 @@ import {
   Pie,
 } from "recharts";
 import { motion } from "motion/react";
-import type { Guest } from "@/lib/types";
+import type { AIOffer, Guest } from "@/lib/types";
+import { getOfferStatusBadgeClasses, getOfferStatusLabel } from "@/lib/offer-status";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -53,7 +54,7 @@ const StatCard = ({ icon: Icon, label, value, subValue, color }: {
 );
 
 // Derive extra data from our Guest type
-function deriveGuestData(guest: Guest) {
+function deriveGuestData(guest: Guest, existingOffer?: AIOffer) {
   const analysis = analyzeGuest(guest);
   const navigationBasedVisits = guest.navigation_path.reduce<Record<string, number>>((acc, step) => {
     if (step === "Showcase Room" || step === "Opportunity Room" || step === "Pitch Room" || step === "Training Center") {
@@ -90,18 +91,29 @@ function deriveGuestData(guest: Guest) {
   if (analysis.score > 70) aiInsights.push("Score élevé — candidat prioritaire pour conversion rapide.");
   if (guest.customization_time > 1) aiInsights.push(`Temps de personnalisation de ${guest.customization_time} min — fort intérêt produit.`);
 
-  const generatedOffer = {
-    status: analysis.level === "hot" ? "READY" : analysis.level === "warm" ? "DRAFT" : "PENDING",
-    title: `Pack ${analysis.recommended_room}`,
-    sessionsIncluded: analysis.score > 70 ? 12 : analysis.score >= 40 ? 6 : 3,
-    roomsIncluded: analysis.score > 70
-      ? ["Training Center", "Showcase Room", analysis.recommended_room].filter((v, i, a) => a.indexOf(v) === i)
-      : [analysis.recommended_room],
-    reason: analysis.offer,
-    confidenceScore: Math.min(99, analysis.score + 10),
-    priorityLevel: analysis.level === "hot" ? "Critical" : analysis.level === "warm" ? "High" : "Normal",
-    recommendedAction: analysis.level === "hot" ? "Envoyer proposition commerciale" : "Planifier démo personnalisée",
-  };
+  const generatedOffer = existingOffer
+    ? {
+      status: existingOffer.status,
+      title: existingOffer.title,
+      sessionsIncluded: existingOffer.sessionsIncluded,
+      roomsIncluded: existingOffer.roomsIncluded,
+      reason: existingOffer.reason,
+      confidenceScore: existingOffer.confidenceScore,
+      priorityLevel: analysis.level === "hot" ? "Critical" : analysis.level === "warm" ? "High" : "Normal",
+      recommendedAction: analysis.level === "hot" ? "Envoyer proposition commerciale" : "Planifier démo personnalisée",
+    }
+    : {
+      status: analysis.level === "hot" ? "READY" : analysis.level === "warm" ? "DRAFT" : "PENDING",
+      title: `Pack ${analysis.recommended_room}`,
+      sessionsIncluded: analysis.score > 70 ? 12 : analysis.score >= 40 ? 6 : 3,
+      roomsIncluded: analysis.score > 70
+        ? ["Training Center", "Showcase Room", analysis.recommended_room].filter((v, i, a) => a.indexOf(v) === i)
+        : [analysis.recommended_room],
+      reason: analysis.offer,
+      confidenceScore: Math.min(99, analysis.score + 10),
+      priorityLevel: analysis.level === "hot" ? "Critical" : analysis.level === "warm" ? "High" : "Normal",
+      recommendedAction: analysis.level === "hot" ? "Envoyer proposition commerciale" : "Planifier démo personnalisée",
+    };
 
   return {
     analysis,
@@ -122,6 +134,7 @@ export default function GuestDetail() {
   const [adminNote, setAdminNote] = useState("");
 
   const guest = guests.find((g) => g.id === id);
+  const guestWithOffer = MOCK_GUESTS.find((g) => g.id === id);
   if (!guest) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
@@ -143,7 +156,7 @@ export default function GuestDetail() {
     aiInsights,
     generatedOffer,
     conversionProbability,
-  } = deriveGuestData(guest);
+  } = deriveGuestData(guest, guestWithOffer?.generatedOffer);
 
   const roomData = [
     { name: "Showcase", value: showcaseVisits },
@@ -245,8 +258,6 @@ export default function GuestDetail() {
         <StatCard icon={Clock} label="Session" value={`${guest.session_duration}m`} subValue="durée totale" color="bg-red-50 text-red-700" />
         <StatCard icon={MessageSquare} label="Interactions" value={guest.interaction_count} subValue="actions" color="bg-emerald-50 text-emerald-600" />
         <StatCard icon={Mic} label="Voice Usage" value={guest.voice_interaction_time} subValue="min" color="bg-orange-50 text-orange-600" />
-        <StatCard icon={Building2} label="Showcase" value={showcaseVisits} subValue="min" color="bg-teal-50 text-teal-700" />
-        <StatCard icon={Zap} label="Opportunity" value={opportunityVisits} subValue="min" color="bg-amber-50 text-amber-600" />
         <StatCard icon={TrendingUp} label="Conversion Prob." value={`${conversionProbability}%`} subValue="probabilité" color="bg-red-50 text-red-600" />
       </div>
 
@@ -378,8 +389,8 @@ export default function GuestDetail() {
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
             <div className="p-6 border-b border-slate-100 bg-slate-50/50">
               <div className="flex items-center justify-between mb-2">
-                <span className="px-2 py-0.5 bg-white border border-slate-200 rounded text-[10px] font-bold text-slate-500 uppercase">
-                  {generatedOffer.status}
+                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getOfferStatusBadgeClasses(generatedOffer.status)}`}>
+                  {getOfferStatusLabel(generatedOffer.status)}
                 </span>
                 <button className="p-1.5 text-slate-400 hover:text-primary hover:bg-white rounded-md transition-all">
                   <Edit3 size={14} />

@@ -7,10 +7,10 @@ import Dashboard from "./pages/Dashboard";
 import Guests from "./pages/Guests";
 import Partners from "./pages/Partners";
 import AntiChurn from "./pages/AntiChurn";
-import Analytics from "./pages/Analytics";
 import GuestDetail from "./pages/GuestDetail";
 import NotFound from "./pages/NotFound";
 import AIOffers from "./pages/AIOffers";
+import Settings from "./pages/Settings";
 
 const queryClient = new QueryClient();
 
@@ -26,8 +26,8 @@ const App = () => (
             <Route path="/guests/:id" element={<GuestDetail />} />
             <Route path="/partners" element={<Partners />} />
             <Route path="/anti-churn" element={<AntiChurn />} />
-            <Route path="/analytics" element={<Analytics />} />
             <Route path="/ai-offers" element={<AIOffers />} />
+            <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Layout>

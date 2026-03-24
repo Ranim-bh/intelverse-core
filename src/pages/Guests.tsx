@@ -1,19 +1,26 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { guests, MOCK_GUESTS } from "@/lib/mock-data";
-import { analyzeGuest, getScoreBgColor, getRoomColor } from "@/lib/scoring";
+import { analyzeGuest, getScoreBgColor } from "@/lib/scoring";
+import { getOfferStatusBadgeClasses, getOfferStatusLabel } from "@/lib/offer-status";
 import { Guest, GuestScore, GuestWithOffer } from "@/lib/types";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { Search, Sparkles, X, Send, ChevronRight, Package, Brain, Layers } from "lucide-react";
 
 const statusSteps = ['Créé', 'Lobby', 'KPIs collectés', 'Offre envoyée', 'Converti'] as const;
 
-const statusColors: Record<string, string> = {
-  pending:  'bg-yellow-100 text-yellow-700 border-yellow-200',
-  approved: 'bg-green-100 text-green-700 border-green-200',
-  sent:     'bg-blue-100 text-blue-700 border-blue-200',
-  accepted: 'bg-red-100 text-red-700 border-red-200',
-  rejected: 'bg-red-100 text-red-700 border-red-200',
+const getGuestStatusBadgeClasses = (status: string) => {
+  if (status === 'Offre envoyée') return 'bg-blue-100 text-blue-700 border-blue-200';
+  if (status === 'Converti') return 'bg-green-100 text-green-700 border-green-200';
+  if (status === 'Supprimée') return 'bg-red-100 text-red-700 border-red-200';
+  return 'bg-yellow-100 text-yellow-700 border-yellow-200';
+};
+
+const getGuestStatusLabel = (status: string) => {
+  if (status === 'Offre envoyée') return '🔵 Offre Envoyée';
+  if (status === 'Converti') return '🟢 Offre Acceptée';
+  if (status === 'Supprimée') return '🔴 Offre Supprimée';
+  return '🟡 Offre Générée';
 };
 
 const confidenceColor = (score: number) => {
@@ -79,7 +86,6 @@ export default function Guests() {
                 <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Session</th>
                 <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Domaine</th>
                 <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Score IA</th>
-                <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Room Recommandée</th>
                 <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Statut</th>
                 <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Actions</th>
               </tr>
@@ -108,17 +114,8 @@ export default function Guests() {
                       </span>
                     </td>
                     <td className="p-4">
-                      <div className="flex flex-wrap gap-1">
-                        {analysis.recommended_rooms.map((room) => (
-                          <span key={room} className={`text-xs px-2 py-0.5 rounded-full font-medium ${getRoomColor(room)}`}>
-                            {room}
-                          </span>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="p-4">
-                      <span className={`text-xs px-2 py-0.5 rounded-full ${guest.status === 'Converti' ? 'bg-success/20 text-success' : 'bg-muted text-muted-foreground'}`}>
-                        {guest.status}
+                      <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${getGuestStatusBadgeClasses(guest.status)}`}>
+                        {getGuestStatusLabel(guest.status)}
                       </span>
                     </td>
                     <td className="p-4">
@@ -217,8 +214,8 @@ export default function Guests() {
                     <p className="font-semibold text-slate-800">{offerModal.aiGuest.fullName}</p>
                     <p className="text-xs text-slate-500">{offerModal.aiGuest.company}</p>
                   </div>
-                  <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase border ${statusColors[offerModal.aiGuest.generatedOffer.status] ?? 'bg-gray-100 text-gray-600 border-gray-200'}`}>
-                    {offerModal.aiGuest.generatedOffer.status}
+                  <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border ${getOfferStatusBadgeClasses(offerModal.aiGuest.generatedOffer.status)}`}>
+                    {getOfferStatusLabel(offerModal.aiGuest.generatedOffer.status)}
                   </span>
                 </div>
 

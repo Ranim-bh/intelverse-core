@@ -3,8 +3,8 @@ import {
   Users,
   Handshake,
   ShieldAlert,
-  BarChart3,
   Sparkles,
+  Settings,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
@@ -26,9 +26,9 @@ const navItems = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
   { title: "Guests", url: "/guests", icon: Users },
   { title: "Partenaires", url: "/partners", icon: Handshake },
-  { title: "Anti-Churn", url: "/anti-churn", icon: ShieldAlert },
-  { title: "Analytiques", url: "/analytics", icon: BarChart3 },
   { title: "AI Offers", url: "/ai-offers", icon: Sparkles },
+  { title: "Anti-Churn", url: "/anti-churn", icon: ShieldAlert },
+  { title: "Settings", url: "/settings", icon: Settings },
 ];
 
 export function AppSidebar() {

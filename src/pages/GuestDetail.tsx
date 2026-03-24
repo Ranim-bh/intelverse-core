@@ -1,6 +1,7 @@
+import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { guests } from "@/lib/mock-data";
-import { analyzeGuest, getRoomColor, ROOM_HEX_COLORS } from "@/lib/scoring";
+import { analyzeGuest } from "@/lib/scoring";
 import {
   ArrowLeft,
   Calendar,
@@ -9,12 +10,11 @@ import {
   Clock,
   Activity,
   Mic,
-  DoorOpen,
+  Globe,
   TrendingUp,
   MessageSquare,
   ChevronRight,
   Zap,
-  CheckCircle2,
   Edit3,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -32,6 +32,8 @@ import {
 } from "recharts";
 import { motion } from "motion/react";
 import type { Guest } from "@/lib/types";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Textarea } from "@/components/ui/textarea";
 
 const StatCard = ({ icon: Icon, label, value, subValue, color }: {
   icon: React.ElementType; label: string; value: string | number; subValue?: string; color: string;
@@ -117,6 +119,7 @@ function deriveGuestData(guest: Guest) {
 export default function GuestDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [adminNote, setAdminNote] = useState("");
 
   const guest = guests.find((g) => g.id === id);
   if (!guest) {
@@ -204,8 +207,8 @@ export default function GuestDetail() {
                 <span className="text-sm">{guest.type_client}</span>
               </div>
               <div className="flex items-center gap-2 text-slate-600">
-                <DoorOpen size={16} className="text-slate-400" />
-                <span className="text-sm">{guest.most_viewed_room}</span>
+                <Globe size={16} className="text-slate-400" />
+                <span className="text-sm">{guest.domain}</span>
               </div>
               <div className="flex items-center gap-2 text-slate-600">
                 <Briefcase size={16} className="text-slate-400" />
@@ -251,6 +254,30 @@ export default function GuestDetail() {
         {/* Charts Section */}
         <div className="lg:col-span-2 space-y-8">
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+            <h3 className="text-lg font-bold text-slate-900 mb-6">Room Observation</h3>
+            <div className="h-80 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={roomData} cx="50%" cy="50%" innerRadius={70} outerRadius={100} paddingAngle={5} dataKey="value">
+                    {roomData.map((_entry, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="flex flex-wrap justify-center gap-4 mt-4">
+              {roomData.map((entry, index) => (
+                <div key={entry.name} className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
+                  <span className="text-xs text-slate-500 font-medium">{entry.name}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
             <h3 className="text-lg font-bold text-slate-900 mb-6">Engagement Trend</h3>
             <div className="h-80 w-full">
               <ResponsiveContainer width="100%" height="100%">
@@ -271,45 +298,19 @@ export default function GuestDetail() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-8">
-            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-              <h3 className="text-lg font-bold text-slate-900 mb-6">Room Observation</h3>
-              <div className="h-64 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={roomData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
-                      {roomData.map((_entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="flex justify-center gap-4 mt-4">
-                {roomData.map((entry, index) => (
-                  <div key={entry.name} className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS[index] }} />
-                    <span className="text-xs text-slate-500 font-medium">{entry.name}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-              <h3 className="text-lg font-bold text-slate-900 mb-6">Navigation Path</h3>
-              <div className="flex flex-wrap items-center gap-2">
-                {guest.navigation_path.map((step, index) => (
-                  <div key={`${step}-${index}`} className="flex items-center gap-2">
-                    <span className="px-3 py-1.5 rounded-full text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
-                      {step}
-                    </span>
-                    {index < guest.navigation_path.length - 1 && (
-                      <ChevronRight size={14} className="text-slate-400" />
-                    )}
-                  </div>
-                ))}
-              </div>
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+            <h3 className="text-lg font-bold text-slate-900 mb-6">Navigation Path</h3>
+            <div className="flex flex-wrap items-center gap-2">
+              {guest.navigation_path.map((step, index) => (
+                <div key={`${step}-${index}`} className="flex items-center gap-2">
+                  <span className="px-3 py-1.5 rounded-full text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
+                    {step}
+                  </span>
+                  {index < guest.navigation_path.length - 1 && (
+                    <ChevronRight size={14} className="text-slate-400" />
+                  )}
+                </div>
+              ))}
             </div>
           </div>
         </div>
@@ -335,22 +336,6 @@ export default function GuestDetail() {
                 <p className="text-sm text-slate-500 italic">Pas assez de données pour l'analyse IA.</p>
               )}
             </div>
-          </div>
-
-          {/* Admin Notes */}
-          <div className="bg-slate-900 text-white p-6 rounded-2xl shadow-lg shadow-slate-200">
-            <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-              <MessageSquare size={20} />
-              Admin Notes
-            </h3>
-            <div className="bg-slate-800/50 p-4 rounded-xl mb-4">
-              <p className="text-sm text-slate-100 italic leading-relaxed">
-                "Aucune note ajoutée pour le moment."
-              </p>
-            </div>
-            <button className="w-full py-2 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-medium transition-colors border border-white/10">
-              Ajouter une Note
-            </button>
           </div>
 
           {/* Recommended Actions */}
@@ -439,6 +424,43 @@ export default function GuestDetail() {
           </div>
         </div>
       </div>
+
+      <Popover>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className="fixed bottom-8 right-8 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-slate-900 text-white shadow-lg transition-colors hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+            aria-label="Ouvrir les notes admin"
+          >
+            <MessageSquare className="h-6 w-6" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          side="left"
+          align="end"
+          sideOffset={16}
+          className="w-96 p-0 shadow-xl border-slate-200"
+        >
+          <div className="border-b border-border px-4 py-3">
+            <h4 className="font-semibold text-sm text-foreground">Admin Notes</h4>
+            <p className="text-xs text-muted-foreground mt-0.5">{guest.name}</p>
+          </div>
+          <div className="p-4">
+            <Textarea
+              placeholder="Ajouter une note pour ce guest…"
+              value={adminNote}
+              onChange={(e) => setAdminNote(e.target.value)}
+              className="min-h-[140px] resize-y text-sm"
+            />
+            <button
+              type="button"
+              className="mt-3 w-full rounded-lg bg-primary py-2.5 text-sm font-medium text-primary-foreground hover:opacity-90 transition-opacity"
+            >
+              Enregistrer la note
+            </button>
+          </div>
+        </PopoverContent>
+      </Popover>
     </motion.div>
   );
 }

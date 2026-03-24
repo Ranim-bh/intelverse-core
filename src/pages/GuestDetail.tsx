@@ -1,256 +1,446 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { guests } from "@/lib/mock-data";
-import { analyzeGuest, getScoreBgColor, getRoomColor, generateGuestOffer, ROOM_HEX_COLORS } from "@/lib/scoring";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { ArrowLeft, ChevronRight, Sparkles, Edit, Brain, StickyNote, Zap } from "lucide-react";
+import { analyzeGuest, getRoomColor, ROOM_HEX_COLORS } from "@/lib/scoring";
+import {
+  ArrowLeft,
+  Calendar,
+  Briefcase,
+  Building2,
+  Clock,
+  Activity,
+  Mic,
+  DoorOpen,
+  TrendingUp,
+  MessageSquare,
+  ChevronRight,
+  Zap,
+  CheckCircle2,
+  Edit3,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  Cell,
+  PieChart,
+  Pie,
+} from "recharts";
+import { motion } from "motion/react";
+import type { Guest } from "@/lib/types";
 
-const statusSteps = ['Créé', 'Lobby', 'KPIs collectés', 'Offre envoyée', 'Converti'] as const;
+const StatCard = ({ icon: Icon, label, value, subValue, color }: {
+  icon: React.ElementType; label: string; value: string | number; subValue?: string; color: string;
+}) => (
+  <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+    <div className="flex items-center gap-3 mb-3">
+      <div className={cn("p-2 rounded-lg", color)}>
+        <Icon size={20} />
+      </div>
+      <span className="text-sm font-medium text-slate-500">{label}</span>
+    </div>
+    <div className="flex items-baseline gap-2">
+      <span className="text-2xl font-bold text-slate-900">{value}</span>
+      {subValue && <span className="text-xs text-slate-500 font-medium">{subValue}</span>}
+    </div>
+  </div>
+);
+
+// Derive extra data from our Guest type
+function deriveGuestData(guest: Guest) {
+  const analysis = analyzeGuest(guest);
+  const showcaseVisits = guest.room_observation_time["Showcase Room"] || 0;
+  const opportunityVisits = guest.room_observation_time["Opportunity Room"] || 0;
+  const pitchVisits = guest.room_observation_time["Pitch Room"] || 0;
+  const trainingVisits = guest.room_observation_time["Training Center"] || 0;
+
+  const activityHistory = [
+    { date: "Sem 1", interactions: Math.round(guest.interaction_count * 0.15) },
+    { date: "Sem 2", interactions: Math.round(guest.interaction_count * 0.25) },
+    { date: "Sem 3", interactions: Math.round(guest.interaction_count * 0.35) },
+    { date: "Sem 4", interactions: Math.round(guest.interaction_count * 0.25) },
+  ];
+
+  const aiInsights: string[] = [];
+  if (guest.voice_interaction_time > 2) aiInsights.push(`Forte utilisation vocale (${guest.voice_interaction_time} min) — profil orienté networking.`);
+  if (guest.rooms_viewed.length >= 3) aiInsights.push(`A exploré ${guest.rooms_viewed.length} rooms — intérêt multi-services confirmé.`);
+  if (guest.idle_time > 1) aiInsights.push(`Temps d'inactivité de ${guest.idle_time} min détecté — risque de désengagement.`);
+  if (analysis.score > 70) aiInsights.push("Score élevé — candidat prioritaire pour conversion rapide.");
+  if (guest.customization_time > 1) aiInsights.push(`Temps de personnalisation de ${guest.customization_time} min — fort intérêt produit.`);
+
+  const generatedOffer = {
+    status: analysis.level === "hot" ? "READY" : analysis.level === "warm" ? "DRAFT" : "PENDING",
+    title: `Pack ${analysis.recommended_room}`,
+    sessionsIncluded: analysis.score > 70 ? 12 : analysis.score >= 40 ? 6 : 3,
+    roomsIncluded: analysis.score > 70
+      ? ["Training Center", "Showcase Room", analysis.recommended_room].filter((v, i, a) => a.indexOf(v) === i)
+      : [analysis.recommended_room],
+    reason: analysis.offer,
+    confidenceScore: Math.min(99, analysis.score + 10),
+    priorityLevel: analysis.level === "hot" ? "Critical" : analysis.level === "warm" ? "High" : "Normal",
+    recommendedAction: analysis.level === "hot" ? "Envoyer proposition commerciale" : "Planifier démo personnalisée",
+  };
+
+  return {
+    analysis,
+    showcaseVisits,
+    opportunityVisits,
+    pitchVisits,
+    trainingVisits,
+    activityHistory,
+    aiInsights,
+    generatedOffer,
+    conversionProbability: Math.min(99, analysis.score + 5),
+  };
+}
+
+const statusColorMap: Record<string, string> = {
+  Créé: "bg-blue-50 text-blue-600 border-blue-100",
+  Lobby: "bg-slate-50 text-slate-500 border-slate-100",
+  "KPIs collectés": "bg-orange-50 text-orange-600 border-orange-100",
+  "Offre envoyée": "bg-indigo-50 text-indigo-600 border-indigo-100",
+  Converti: "bg-emerald-50 text-emerald-600 border-emerald-100",
+};
 
 export default function GuestDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
 
-  const guest = guests.find(g => g.id === id);
+  const guest = guests.find((g) => g.id === id);
   if (!guest) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
-        <p className="text-muted-foreground">Guest introuvable</p>
-        <button onClick={() => navigate('/guests')} className="text-primary text-sm hover:underline">← Retour aux guests</button>
+        <p className="text-slate-500">Guest introuvable</p>
+        <button onClick={() => navigate("/guests")} className="text-indigo-600 text-sm hover:underline">
+          ← Retour aux guests
+        </button>
       </div>
     );
   }
 
-  const analysis = analyzeGuest(guest);
+  const {
+    analysis,
+    showcaseVisits,
+    opportunityVisits,
+    pitchVisits,
+    trainingVisits,
+    activityHistory,
+    aiInsights,
+    generatedOffer,
+    conversionProbability,
+  } = deriveGuestData(guest);
 
-  // Generated offer mock data derived from analysis
-  const generatedOffer = {
-    status: analysis.level === 'hot' ? 'READY' : analysis.level === 'warm' ? 'DRAFT' : 'PENDING',
-    title: `Pack ${analysis.recommended_room}`,
-    sessionsIncluded: analysis.score > 70 ? 12 : analysis.score >= 40 ? 6 : 3,
-    roomsIncluded: analysis.score > 70
-      ? ['Training Center', 'Showcase Room', analysis.recommended_room]
-      : [analysis.recommended_room],
-    reason: analysis.offer,
-    confidenceScore: Math.min(99, analysis.score + 10),
-  };
+  const roomData = [
+    { name: "Showcase", value: showcaseVisits },
+    { name: "Opportunity", value: opportunityVisits },
+    { name: "Pitch", value: pitchVisits },
+    { name: "Training", value: trainingVisits },
+  ].filter((d) => d.value > 0);
 
-  const kpiCards = [
-    { label: 'Score IA', value: `${analysis.score}/100`, color: analysis.level === 'hot' ? 'text-success' : analysis.level === 'warm' ? 'text-warning' : 'text-destructive' },
-    { label: 'Session', value: `${guest.session_duration} min`, color: 'text-primary' },
-    { label: 'Interactions', value: String(guest.interaction_count), color: 'text-room-showcase' },
-    { label: 'Voice', value: `${guest.voice_interaction_time} min`, color: 'text-success' },
-    { label: 'Idle', value: `${guest.idle_time} min`, color: 'text-destructive' },
-    { label: 'Rooms Vues', value: String(guest.rooms_viewed.length), color: 'text-room-training' },
-  ];
-
-  const chartData = [
-    { name: 'Session (min)', value: guest.session_duration, fill: '#06B6D4' },
-    { name: 'Interactions', value: guest.interaction_count, fill: '#8B5CF6' },
-    { name: 'Voice (min)', value: guest.voice_interaction_time, fill: '#10B981' },
-    { name: 'Idle (min)', value: guest.idle_time, fill: '#EF4444' },
-  ];
-
-  const roomChartData = Object.entries(guest.room_observation_time).map(([room, time]) => ({
-    name: room.replace(' Room', '').replace(' Center', ''),
-    time,
-    clicks: guest.room_click_rate[room] || 0,
-    fill: ROOM_HEX_COLORS[room] || '#64748B',
-  }));
+  const COLORS = ["#6366f1", "#10b981", "#f59e0b", "#3b82f6"];
 
   return (
-    <div className="space-y-6 animate-fade-in">
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="space-y-8 pb-12"
+    >
       {/* Header */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center justify-between">
         <button
-          onClick={() => navigate('/guests')}
-          className="p-2 rounded-lg bg-card border border-border hover:bg-muted transition-colors"
+          onClick={() => navigate("/guests")}
+          className="flex items-center gap-2 text-slate-500 hover:text-slate-900 transition-colors group"
         >
-          <ArrowLeft className="h-4 w-4 text-foreground" />
+          <div className="p-2 rounded-lg group-hover:bg-slate-100 transition-colors">
+            <ArrowLeft size={20} />
+          </div>
+          <span className="font-medium">Retour aux Guests</span>
         </button>
-        <div className="flex-1">
-          <h1 className="text-2xl font-bold text-foreground">{guest.name}</h1>
-          <p className="text-sm text-muted-foreground">{guest.id} · {guest.type_client} · Créé le {guest.created_at}</p>
+        <div className="flex gap-3">
+          <button className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors">
+            Modifier Profil
+          </button>
+          <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors shadow-sm shadow-indigo-200">
+            Envoyer Offre
+          </button>
         </div>
-        <span className={`text-xs px-3 py-1 rounded-full font-medium ${guest.status === 'Converti' ? 'bg-success/20 text-success' : 'bg-muted text-muted-foreground'}`}>
-          {guest.status}
-        </span>
       </div>
 
-      {/* Status Timeline */}
-      <div className="glass-card p-4">
-        <div className="flex items-center gap-1 overflow-x-auto pb-1">
-          {statusSteps.map((step, i) => {
-            const stepIndex = statusSteps.indexOf(guest.status);
-            const isComplete = i <= stepIndex;
-            const isCurrent = i === stepIndex;
-            return (
-              <div key={step} className="flex items-center">
-                <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-medium whitespace-nowrap ${
-                  isCurrent ? 'bg-primary text-primary-foreground' :
-                  isComplete ? 'bg-success/20 text-success' :
-                  'bg-muted text-muted-foreground'
-                }`}>
-                  {step}
-                </div>
-                {i < statusSteps.length - 1 && <ChevronRight className="h-3 w-3 text-muted-foreground mx-1 shrink-0" />}
+      {/* Profile Summary */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-8">
+        <div className="flex flex-col md:flex-row gap-8 items-start">
+          <div className="w-24 h-24 rounded-2xl bg-indigo-600 flex items-center justify-center text-white text-3xl font-bold shrink-0">
+            {guest.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
+          </div>
+          <div className="flex-1 space-y-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-3xl font-bold text-slate-900">{guest.name}</h1>
+              <span className={cn("px-3 py-1 rounded-full text-xs font-semibold border", statusColorMap[guest.status] || "bg-slate-50 text-slate-500 border-slate-100")}>
+                {guest.status}
+              </span>
+              {analysis.level === "hot" && (
+                <span className="flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold bg-rose-500 text-white">
+                  <Zap size={12} fill="currentColor" />
+                  HOT
+                </span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-y-4 gap-x-8">
+              <div className="flex items-center gap-2 text-slate-600">
+                <Building2 size={16} className="text-slate-400" />
+                <span className="text-sm">{guest.type_client}</span>
               </div>
-            );
-          })}
+              <div className="flex items-center gap-2 text-slate-600">
+                <DoorOpen size={16} className="text-slate-400" />
+                <span className="text-sm">{guest.most_viewed_room}</span>
+              </div>
+              <div className="flex items-center gap-2 text-slate-600">
+                <Briefcase size={16} className="text-slate-400" />
+                <span className="text-sm">{guest.id}</span>
+              </div>
+              <div className="flex items-center gap-2 text-slate-600">
+                <Calendar size={16} className="text-slate-400" />
+                <span className="text-sm">Créé le {guest.created_at}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="w-full md:w-auto p-4 bg-slate-50 rounded-xl border border-slate-100">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Engagement Level</p>
+            <div className="flex items-center gap-3">
+              <div className="flex-1 h-2 w-32 bg-slate-200 rounded-full overflow-hidden">
+                <div
+                  className={cn(
+                    "h-full rounded-full",
+                    analysis.score > 70 ? "bg-emerald-500" : analysis.score > 40 ? "bg-orange-500" : "bg-rose-500"
+                  )}
+                  style={{ width: `${analysis.score}%` }}
+                />
+              </div>
+              <span className="text-lg font-bold text-slate-900">{analysis.level.toUpperCase()}</span>
+            </div>
+          </div>
         </div>
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        {kpiCards.map(kpi => (
-          <div key={kpi.label} className="glass-card p-4 text-center">
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">{kpi.label}</p>
-            <p className={`font-mono text-lg font-bold ${kpi.color}`}>{kpi.value}</p>
-          </div>
-        ))}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard icon={Activity} label="Score IA" value={analysis.score} subValue="/100" color="bg-blue-50 text-blue-600" />
+        <StatCard icon={Clock} label="Session" value={`${guest.session_duration}m`} subValue="durée totale" color="bg-indigo-50 text-indigo-600" />
+        <StatCard icon={MessageSquare} label="Interactions" value={guest.interaction_count} subValue="actions" color="bg-emerald-50 text-emerald-600" />
+        <StatCard icon={Mic} label="Voice Usage" value={guest.voice_interaction_time} subValue="min" color="bg-orange-50 text-orange-600" />
+        <StatCard icon={DoorOpen} label="Rooms Visitées" value={guest.rooms_viewed.length} subValue="rooms" color="bg-rose-50 text-rose-600" />
+        <StatCard icon={Building2} label="Showcase" value={showcaseVisits} subValue="min" color="bg-violet-50 text-violet-600" />
+        <StatCard icon={Zap} label="Opportunity" value={opportunityVisits} subValue="min" color="bg-amber-50 text-amber-600" />
+        <StatCard icon={TrendingUp} label="Conversion Prob." value={`${conversionProbability}%`} subValue="probabilité" color="bg-cyan-50 text-cyan-600" />
       </div>
 
-      {/* Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Behavior Chart */}
-        <div className="glass-card p-6">
-          <h3 className="text-sm font-semibold text-foreground mb-4">Comportement</h3>
-          <div className="h-48">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData}>
-                <XAxis dataKey="name" tick={{ fontSize: 10, fill: 'hsl(215 20% 65%)' }} axisLine={false} />
-                <YAxis tick={{ fontSize: 10, fill: 'hsl(215 20% 65%)' }} axisLine={false} />
-                <Tooltip contentStyle={{ backgroundColor: 'hsl(217 33% 17%)', border: '1px solid hsl(215 25% 27%)', borderRadius: '8px', fontSize: '12px' }} />
-                <Bar dataKey="value" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Room Engagement Chart */}
-        <div className="glass-card p-6">
-          <h3 className="text-sm font-semibold text-foreground mb-4">Engagement par Room</h3>
-          <div className="h-48">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={roomChartData}>
-                <XAxis dataKey="name" tick={{ fontSize: 10, fill: 'hsl(215 20% 65%)' }} axisLine={false} />
-                <YAxis tick={{ fontSize: 10, fill: 'hsl(215 20% 65%)' }} axisLine={false} />
-                <Tooltip contentStyle={{ backgroundColor: 'hsl(217 33% 17%)', border: '1px solid hsl(215 25% 27%)', borderRadius: '8px', fontSize: '12px' }} />
-                <Bar dataKey="time" name="Temps (min)" radius={[6, 6, 0, 0]} />
-                <Bar dataKey="clicks" name="Clics" radius={[6, 6, 0, 0]} fill="#8B5CF6" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      </div>
-
-      {/* AI Offer Card — PackageManagement style */}
-      <div className="glass-card overflow-hidden">
-        {/* Top section */}
-        <div className="bg-muted/30 border-b border-border p-5 flex items-start justify-between">
-          <div>
-            <span className="inline-block text-[10px] uppercase tracking-widest font-semibold text-foreground border border-foreground/20 rounded px-2 py-0.5 mb-3">
-              {generatedOffer.status}
-            </span>
-            <h3 className="text-xl font-bold text-foreground">{generatedOffer.title}</h3>
-            <p className="text-xs text-muted-foreground mt-1">For: {guest.name} ({guest.type_client})</p>
-          </div>
-          <button className="p-2 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground">
-            <Edit className="h-4 w-4" />
-          </button>
-        </div>
-
-        {/* Middle section */}
-        <div className="p-6 space-y-4 flex-1">
-          {/* Sessions row */}
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">Sessions</span>
-            <span className="font-mono font-bold text-foreground">{generatedOffer.sessionsIncluded}</span>
-          </div>
-
-          {/* Included Rooms */}
-          <div>
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">Included Rooms</p>
-            <div className="flex flex-wrap gap-2">
-              {generatedOffer.roomsIncluded.map(room => (
-                <span key={room} className={`text-xs px-2.5 py-1 rounded-full font-medium ${getRoomColor(room)}`}>
-                  {room}
-                </span>
-              ))}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        {/* Charts Section */}
+        <div className="lg:col-span-2 space-y-8">
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+            <h3 className="text-lg font-bold text-slate-900 mb-6">Engagement Trend</h3>
+            <div className="h-80 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={activityHistory}>
+                  <defs>
+                    <linearGradient id="colorInteractions" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#6366f1" stopOpacity={0.1} />
+                      <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "#64748b" }} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "#64748b" }} />
+                  <Tooltip contentStyle={{ borderRadius: "12px", border: "none", boxShadow: "0 10px 15px -3px rgb(0 0 0 / 0.1)" }} />
+                  <Area type="monotone" dataKey="interactions" stroke="#6366f1" strokeWidth={3} fillOpacity={1} fill="url(#colorInteractions)" />
+                </AreaChart>
+              </ResponsiveContainer>
             </div>
           </div>
 
-          {/* AI Reason */}
-          <div className="bg-primary/5 border border-primary/10 rounded-lg p-4">
-            <p className="text-[10px] uppercase tracking-wider text-primary mb-2">AI Reason</p>
-            <p className="text-sm text-muted-foreground italic leading-relaxed">"{generatedOffer.reason}"</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+              <h3 className="text-lg font-bold text-slate-900 mb-6">Room Activity</h3>
+              <div className="h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={roomData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
+                      {roomData.map((_entry, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="flex justify-center gap-4 mt-4">
+                {roomData.map((entry, index) => (
+                  <div key={entry.name} className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS[index] }} />
+                    <span className="text-xs text-slate-500 font-medium">{entry.name}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+              <h3 className="text-lg font-bold text-slate-900 mb-6">Voice vs Text</h3>
+              <div className="h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={[
+                      { name: "Voice", value: guest.voice_interaction_time },
+                      { name: "Text/Other", value: Math.max(0, guest.interaction_count - guest.voice_interaction_time) },
+                    ]}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="name" axisLine={false} tickLine={false} />
+                    <YAxis axisLine={false} tickLine={false} />
+                    <Tooltip />
+                    <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                      <Cell fill="#f59e0b" />
+                      <Cell fill="#6366f1" />
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Bottom section */}
-        <div className="bg-muted/30 border-t border-border px-6 py-4 flex items-center justify-between">
-          <div>
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Confidence</p>
-            <p className="font-mono text-lg font-black text-foreground">{generatedOffer.confidenceScore}%</p>
+        {/* Sidebar */}
+        <div className="space-y-8">
+          {/* AI Insights */}
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+            <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
+              <TrendingUp size={20} className="text-indigo-600" />
+              AI Insights
+            </h3>
+            <div className="space-y-4">
+              {aiInsights.map((insight, idx) => (
+                <div key={idx} className="flex gap-4 p-3 rounded-xl hover:bg-slate-50 transition-colors">
+                  <div className="p-2 rounded-lg shrink-0 h-fit bg-indigo-50 text-indigo-600">
+                    <Activity size={18} />
+                  </div>
+                  <p className="text-sm text-slate-700 leading-relaxed">{insight}</p>
+                </div>
+              ))}
+              {aiInsights.length === 0 && (
+                <p className="text-sm text-slate-500 italic">Pas assez de données pour l'analyse IA.</p>
+              )}
+            </div>
           </div>
-          <button className="px-4 py-2 bg-card border border-border rounded-lg text-xs font-bold text-foreground hover:bg-muted transition-colors">
-            Review Offer
-          </button>
+
+          {/* Admin Notes */}
+          <div className="bg-indigo-900 text-white p-6 rounded-2xl shadow-lg shadow-indigo-200">
+            <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+              <MessageSquare size={20} />
+              Admin Notes
+            </h3>
+            <div className="bg-indigo-800/50 p-4 rounded-xl mb-4">
+              <p className="text-sm text-indigo-100 italic leading-relaxed">
+                "Aucune note ajoutée pour le moment."
+              </p>
+            </div>
+            <button className="w-full py-2 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-medium transition-colors border border-white/10">
+              Ajouter une Note
+            </button>
+          </div>
+
+          {/* Recommended Actions */}
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+            <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
+              <Zap size={20} className="text-amber-500" />
+              Actions Recommandées
+            </h3>
+            <div className="space-y-3">
+              {analysis.level === "hot" ? (
+                <>
+                  <button className="w-full flex items-center justify-between p-3 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors group">
+                    <span className="text-sm font-bold">Contacter Maintenant</span>
+                    <ChevronRight size={16} className="group-hover:translate-x-1 transition-transform" />
+                  </button>
+                  <button className="w-full flex items-center justify-between p-3 rounded-xl bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors group">
+                    <span className="text-sm font-bold">Envoyer Offre Personnalisée</span>
+                    <ChevronRight size={16} className="group-hover:translate-x-1 transition-transform" />
+                  </button>
+                </>
+              ) : analysis.level === "cold" ? (
+                <button className="w-full flex items-center justify-between p-3 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors group">
+                  <span className="text-sm font-bold">Envoyer Intro de Bienvenue</span>
+                  <ChevronRight size={16} className="group-hover:translate-x-1 transition-transform" />
+                </button>
+              ) : (
+                <button className="w-full flex items-center justify-between p-3 rounded-xl bg-slate-50 text-slate-700 hover:bg-slate-100 transition-colors group">
+                  <span className="text-sm font-bold">Surveiller l'Activité</span>
+                  <ChevronRight size={16} className="group-hover:translate-x-1 transition-transform" />
+                </button>
+              )}
+              <button className="w-full flex items-center justify-between p-3 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors group">
+                <span className="text-sm font-bold">Planifier Follow-up</span>
+                <ChevronRight size={16} className="group-hover:translate-x-1 transition-transform" />
+              </button>
+            </div>
+          </div>
+
+          {/* AI Generated Offer — PackageManagement style */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+            <div className="p-6 border-b border-slate-100 bg-slate-50/50">
+              <div className="flex items-center justify-between mb-2">
+                <span className="px-2 py-0.5 bg-white border border-slate-200 rounded text-[10px] font-bold text-slate-500 uppercase">
+                  {generatedOffer.status}
+                </span>
+                <button className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-md transition-all">
+                  <Edit3 size={14} />
+                </button>
+              </div>
+              <h3 className="text-xl font-bold text-slate-900">{generatedOffer.title}</h3>
+              <p className="text-xs text-slate-500 mt-1">For: {guest.name} ({guest.type_client})</p>
+            </div>
+
+            <div className="p-6 flex-1 space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-slate-500">Sessions</span>
+                <span className="text-sm font-bold text-slate-900">{generatedOffer.sessionsIncluded}</span>
+              </div>
+
+              <div>
+                <p className="text-xs font-bold text-slate-400 uppercase mb-2">Included Rooms</p>
+                <div className="flex flex-wrap gap-2">
+                  {generatedOffer.roomsIncluded.map((room, idx) => (
+                    <span key={idx} className="px-2 py-1 bg-indigo-50 text-indigo-600 rounded text-[10px] font-medium">
+                      {room}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="p-3 bg-indigo-50 rounded-lg border border-indigo-100">
+                <p className="text-[10px] font-bold text-indigo-400 uppercase mb-1">AI Reason</p>
+                <p className="text-xs text-indigo-700 italic">"{generatedOffer.reason}"</p>
+              </div>
+            </div>
+
+            <div className="p-6 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase">Confidence</p>
+                <p className="text-lg font-black text-slate-900">{generatedOffer.confidenceScore}%</p>
+              </div>
+              <button className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50 transition-colors">
+                Review Offer
+              </button>
+            </div>
+          </div>
         </div>
       </div>
-
-      {/* Bottom Row: AI Insights, Notes, Actions */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* AI Insights */}
-        <div className="glass-card p-5">
-          <div className="flex items-center gap-2 mb-3">
-            <Brain className="h-4 w-4 text-primary" />
-            <h3 className="text-sm font-semibold text-foreground">AI Insights</h3>
-          </div>
-          <ul className="space-y-2 text-xs text-muted-foreground">
-            <li className="flex items-start gap-2">
-              <span className="mt-1 h-1.5 w-1.5 rounded-full bg-primary shrink-0" />
-              Room la plus visitée : <span className="text-foreground font-medium">{guest.most_viewed_room}</span>
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="mt-1 h-1.5 w-1.5 rounded-full bg-success shrink-0" />
-              Score de conversion : <span className={`font-mono font-bold ${analysis.level === 'hot' ? 'text-success' : analysis.level === 'warm' ? 'text-warning' : 'text-destructive'}`}>{analysis.level.toUpperCase()}</span>
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="mt-1 h-1.5 w-1.5 rounded-full bg-room-showcase shrink-0" />
-              Taux de personnalisation : <span className="text-foreground font-medium">{guest.customization_time} min</span>
-            </li>
-          </ul>
-        </div>
-
-        {/* Admin Notes */}
-        <div className="glass-card p-5">
-          <div className="flex items-center gap-2 mb-3">
-            <StickyNote className="h-4 w-4 text-warning" />
-            <h3 className="text-sm font-semibold text-foreground">Notes Admin</h3>
-          </div>
-          <div className="bg-muted/30 rounded-lg p-3 text-xs text-muted-foreground italic">
-            Aucune note pour le moment. Cliquez pour ajouter une observation.
-          </div>
-        </div>
-
-        {/* Recommended Actions */}
-        <div className="glass-card p-5">
-          <div className="flex items-center gap-2 mb-3">
-            <Zap className="h-4 w-4 text-room-pitch" />
-            <h3 className="text-sm font-semibold text-foreground">Actions Recommandées</h3>
-          </div>
-          <div className="space-y-2">
-            <button className="w-full flex items-center gap-2 px-3 py-2 bg-primary/10 text-primary rounded-lg text-xs font-medium hover:bg-primary/20 transition-colors">
-              <Sparkles className="h-3 w-3" />
-              Envoyer offre via Chatbot
-            </button>
-            <button className="w-full flex items-center gap-2 px-3 py-2 bg-success/10 text-success rounded-lg text-xs font-medium hover:bg-success/20 transition-colors">
-              <Zap className="h-3 w-3" />
-              Planifier démo {analysis.recommended_room}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    </motion.div>
   );
 }

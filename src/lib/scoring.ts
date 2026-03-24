@@ -1,15 +1,45 @@
 import { Guest, Partner, GuestScore, RoomName, RiskLevel, ChurnSignal } from './types';
 
-// ─── Guest Scoring (0-100) ───
+// ─── Guest Scoring (0-100) — Formule Normalisée ───
+// Valeurs max observées pour normaliser chaque critère entre 0 et 1
+const MAX_SESSION      = 30;  // minutes max d'une session
+const MAX_INTERACTIONS = 50;  // nombre max d'interactions
+const MAX_VOICE        = 10;  // minutes max de voice
+const MAX_ROOMS        = 4;   // nombre max de rooms
+const MAX_CLICKS       = 15;  // total clics max sur les rooms
+const MAX_IDLE         = 10;  // minutes max d'idle
+
+// Poids : total = 100%
+const WEIGHTS = {
+  session:      25,  // Rester longtemps = intérêt fort
+  interactions: 20,  // Interagir = intention
+  voice:        30,  // Parler = engagement très fort
+  rooms:        15,  // Explorer plusieurs rooms = curiosité
+  clicks:       10,  // Clics ciblés = intention précise
+  idle:        -10,  // Inactif = désintérêt (pénalité)
+};
+
 export function calculateGuestScore(guest: Guest): number {
-  const raw =
-    guest.session_duration * 3 +
-    guest.interaction_count * 1.5 +
-    guest.voice_interaction_time * 8 +
-    guest.rooms_viewed.length * 5 +
-    Object.values(guest.room_click_rate).reduce((a, b) => a + b, 0) * 4 -
-    guest.idle_time * 6;
-  return Math.min(100, Math.max(0, Math.round(raw)));
+  const totalClicks = Object.values(guest.room_click_rate).reduce((a, b) => a + b, 0);
+
+  // Normalisation : chaque critère → valeur entre 0 et 1
+  const n_session      = Math.min(guest.session_duration / MAX_SESSION, 1);
+  const n_interactions = Math.min(guest.interaction_count / MAX_INTERACTIONS, 1);
+  const n_voice        = Math.min(guest.voice_interaction_time / MAX_VOICE, 1);
+  const n_rooms        = Math.min(guest.rooms_viewed.length / MAX_ROOMS, 1);
+  const n_clicks       = Math.min(totalClicks / MAX_CLICKS, 1);
+  const n_idle         = Math.min(guest.idle_time / MAX_IDLE, 1);
+
+  // Score pondéré (toujours entre 0 et 100)
+  const score =
+    n_session      * WEIGHTS.session +
+    n_interactions * WEIGHTS.interactions +
+    n_voice        * WEIGHTS.voice +
+    n_rooms        * WEIGHTS.rooms +
+    n_clicks       * WEIGHTS.clicks +
+    n_idle         * WEIGHTS.idle;
+
+  return Math.min(100, Math.max(0, Math.round(score)));
 }
 
 export function getScoreLevel(score: number): 'hot' | 'warm' | 'cold' {
@@ -48,7 +78,7 @@ export function recommendRoom(guest: Guest): RoomName {
     return 'Opportunity Room';
   }
   if (guest.session_duration < 5 && guest.idle_time > 2) {
-    return 'Training Center'; // onboarding guidé
+    return 'Training Center';
   }
   return guest.session_duration > 10 && guest.interaction_count < 15
     ? 'Showcase Room'

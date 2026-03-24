@@ -9,14 +9,13 @@ const MAX_ROOMS        = 4;   // nombre max de rooms
 const MAX_CLICKS       = 15;  // total clics max sur les rooms
 const MAX_IDLE         = 10;  // minutes max d'idle
 
-// Poids : total = 100%
+// Poids basés sur tes priorités métier (total = 100%)
 const WEIGHTS = {
-  session:      25,  // Rester longtemps = intérêt fort
-  interactions: 20,  // Interagir = intention
-  voice:        30,  // Parler = engagement très fort
-  rooms:        15,  // Explorer plusieurs rooms = curiosité
-  clicks:       10,  // Clics ciblés = intention précise
-  idle:        -10,  // Inactif = désintérêt (pénalité)
+  session:      35,  // Priorité 1 — rester longtemps = intérêt fort
+  rooms:        25,  // Priorité 2 — explorer plusieurs rooms = curiosité
+  voice:        20,  // Priorité 3 — parler = engagement sérieux
+  interactions: 15,  // Priorité 4 — cliquer = intention
+  idle:          0,  // Pas de pénalité pour l inactivité
 };
 
 export function calculateGuestScore(guest: Guest): number {
@@ -24,20 +23,16 @@ export function calculateGuestScore(guest: Guest): number {
 
   // Normalisation : chaque critère → valeur entre 0 et 1
   const n_session      = Math.min(guest.session_duration / MAX_SESSION, 1);
-  const n_interactions = Math.min(guest.interaction_count / MAX_INTERACTIONS, 1);
-  const n_voice        = Math.min(guest.voice_interaction_time / MAX_VOICE, 1);
   const n_rooms        = Math.min(guest.rooms_viewed.length / MAX_ROOMS, 1);
-  const n_clicks       = Math.min(totalClicks / MAX_CLICKS, 1);
-  const n_idle         = Math.min(guest.idle_time / MAX_IDLE, 1);
+  const n_voice        = Math.min(guest.voice_interaction_time / MAX_VOICE, 1);
+  const n_interactions = Math.min(totalClicks / MAX_CLICKS, 1);
 
-  // Score pondéré (toujours entre 0 et 100)
+  // Score pondéré — toujours entre 0 et 100
   const score =
     n_session      * WEIGHTS.session +
-    n_interactions * WEIGHTS.interactions +
-    n_voice        * WEIGHTS.voice +
     n_rooms        * WEIGHTS.rooms +
-    n_clicks       * WEIGHTS.clicks +
-    n_idle         * WEIGHTS.idle;
+    n_voice        * WEIGHTS.voice +
+    n_interactions * WEIGHTS.interactions;
 
   return Math.min(100, Math.max(0, Math.round(score)));
 }

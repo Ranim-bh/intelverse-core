@@ -8,6 +8,7 @@ import Guests from "./pages/Guests";
 import Partners from "./pages/Partners";
 import AntiChurn from "./pages/AntiChurn";
 import Analytics from "./pages/Analytics";
+import GuestDetail from "./pages/GuestDetail";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { guests } from "@/lib/mock-data";
 import { analyzeGuest, getScoreBgColor, getRoomColor, generateGuestOffer } from "@/lib/scoring";
 import { Guest, GuestScore } from "@/lib/types";

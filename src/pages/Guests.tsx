@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { guests } from "@/lib/mock-data";
 import { analyzeGuest, getScoreBgColor, getRoomColor, generateGuestOffer } from "@/lib/scoring";
 import { Guest, GuestScore } from "@/lib/types";
@@ -8,6 +9,7 @@ import { Search, Filter, Sparkles, X, Send, ChevronRight } from "lucide-react";
 const statusSteps = ['Créé', 'Lobby', 'KPIs collectés', 'Offre envoyée', 'Converti'] as const;
 
 export default function Guests() {
+  const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [filterType, setFilterType] = useState<string>("all");
   const [selectedGuest, setSelectedGuest] = useState<Guest | null>(null);
@@ -76,7 +78,7 @@ export default function Guests() {
                     key={guest.id}
                     className="border-b border-border/50 hover:bg-muted/30 cursor-pointer transition-colors animate-slide-up"
                     style={{ animationDelay: `${i * 50}ms` }}
-                    onClick={() => setSelectedGuest(selectedGuest?.id === guest.id ? null : guest)}
+                    onClick={() => navigate(`/guests/${guest.id}`)}
                   >
                     <td className="p-4 font-mono text-xs text-muted-foreground">{guest.id}</td>
                     <td className="p-4 font-medium text-foreground">{guest.name}</td>

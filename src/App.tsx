@@ -8,6 +8,7 @@ import Guests from "./pages/Guests";
 import Partners from "./pages/Partners";
 import AntiChurn from "./pages/AntiChurn";
 import Analytics from "./pages/Analytics";
+import GuestDetail from "./pages/GuestDetail";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -21,6 +22,7 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/guests" element={<Guests />} />
+            <Route path="/guests/:id" element={<GuestDetail />} />
             <Route path="/partners" element={<Partners />} />
             <Route path="/anti-churn" element={<AntiChurn />} />
             <Route path="/analytics" element={<Analytics />} />

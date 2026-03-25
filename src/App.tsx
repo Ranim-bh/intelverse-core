@@ -4,7 +4,7 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Layout } from "@/components/Layout";
 import Dashboard from "./pages/Dashboard";
-import Guests from "./pages/Guests";
+import Users from "./pages/Users";
 import Partners from "./pages/Partners";
 import AntiChurn from "./pages/AntiChurn";
 import GuestDetail from "./pages/GuestDetail";
@@ -22,7 +22,7 @@ const App = () => (
         <Layout>
           <Routes>
             <Route path="/" element={<Dashboard />} />
-            <Route path="/guests" element={<Guests />} />
+            <Route path="/guests" element={<Users />} />
             <Route path="/guests/:id" element={<GuestDetail />} />
             <Route path="/partners" element={<Partners />} />
             <Route path="/anti-churn" element={<AntiChurn />} />

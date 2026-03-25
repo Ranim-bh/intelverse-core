@@ -1,5 +1,7 @@
 export type RoomName = 'Training Center' | 'Showcase Room' | 'Opportunity Room' | 'Pitch Room';
 export type ClientType = 'Entreprise' | 'Institution';
+export type UserRole = 'Guest' | 'Client' | 'Partner';
+export type UserSource = 'LinkedIn' | 'Facebook' | 'Instagram' | 'Twitter' | 'YouTube';
 export type GuestStatus = 'Créé' | 'Lobby' | 'KPIs collectés' | 'Offre envoyée' | 'Converti';
 export type PartnerLevel = 'Partenaire' | 'Partenaire Fiable';
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
@@ -8,6 +10,8 @@ export type ChurnSignal = 'G1' | 'G2' | 'G3' | 'G4' | 'P1' | 'P2' | 'P3' | 'P4' 
 export interface Guest {
   id: string;
   name: string;
+  source: UserSource;
+  role: UserRole;
   type_client: ClientType;
   domain: string;
   session_duration: number;

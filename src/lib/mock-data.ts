@@ -6,6 +6,8 @@ export const MOCK_GUESTS: GuestWithOffer[] = [
     fullName: 'Ahmed Ben Ali',
     company: 'TechCorp International',
     name: 'TechCorp International',
+    source: 'LinkedIn',
+    role: 'Guest',
     type_client: 'Entreprise',
     domain: 'Technologie',
     session_duration: 12,
@@ -27,7 +29,7 @@ export const MOCK_GUESTS: GuestWithOffer[] = [
       roomsIncluded: ['Pitch Room', 'Showcase Room'],
       reason: 'High engagement in Pitch Room with strong click rates indicates strong interest in presentation and networking features.',
       confidenceScore: 92,
-      status: 'approved',
+      status: 'rejected',
     },
   },
   {
@@ -35,6 +37,8 @@ export const MOCK_GUESTS: GuestWithOffer[] = [
     fullName: 'Sana Trabelsi',
     company: 'Institut National Formation',
     name: 'Institut National Formation',
+    source: 'Facebook',
+    role: 'Client',
     type_client: 'Institution',
     domain: 'Education',
     session_duration: 3,
@@ -64,6 +68,8 @@ export const MOCK_GUESTS: GuestWithOffer[] = [
     fullName: 'Mohamed Khalil',
     company: 'InnovateTech Solutions',
     name: 'InnovateTech Solutions',
+    source: 'LinkedIn',
+    role: 'Partner',
     type_client: 'Entreprise',
     domain: 'Innovation',
     session_duration: 20,
@@ -93,6 +99,8 @@ export const MOCK_GUESTS: GuestWithOffer[] = [
     fullName: 'Leila Mansouri',
     company: 'EduPrime Academy',
     name: 'EduPrime Academy',
+    source: 'Instagram',
+    role: 'Client',
     type_client: 'Institution',
     domain: 'Formation',
     session_duration: 8,
@@ -114,7 +122,7 @@ export const MOCK_GUESTS: GuestWithOffer[] = [
       roomsIncluded: ['Training Center', 'Showcase Room'],
       reason: 'Solid engagement in training-related rooms fits an education-focused institution profile.',
       confidenceScore: 78,
-      status: 'sent',
+      status: 'accepted',
     },
   },
   {
@@ -122,6 +130,8 @@ export const MOCK_GUESTS: GuestWithOffer[] = [
     fullName: 'Karim Bouaziz',
     company: 'StartupHub Ventures',
     name: 'StartupHub Ventures',
+    source: 'Twitter',
+    role: 'Partner',
     type_client: 'Entreprise',
     domain: 'Entrepreneuriat',
     session_duration: 15,
@@ -148,10 +158,12 @@ export const MOCK_GUESTS: GuestWithOffer[] = [
   },
 ];
 
-export const guests: Guest[] = [
+export const users: Guest[] = [
   {
     id: 'G001',
     name: 'TechCorp International',
+    source: 'LinkedIn',
+    role: 'Guest',
     type_client: 'Entreprise',
     domain: 'Technologie',
     session_duration: 12,
@@ -170,6 +182,8 @@ export const guests: Guest[] = [
   {
     id: 'G002',
     name: 'Institut National Formation',
+    source: 'Facebook',
+    role: 'Client',
     type_client: 'Institution',
     domain: 'Education',
     session_duration: 3,
@@ -188,6 +202,8 @@ export const guests: Guest[] = [
   {
     id: 'G003',
     name: 'InnovateTech Solutions',
+    source: 'LinkedIn',
+    role: 'Partner',
     type_client: 'Entreprise',
     domain: 'Innovation',
     session_duration: 20,
@@ -206,6 +222,8 @@ export const guests: Guest[] = [
   {
     id: 'G004',
     name: 'EduPrime Academy',
+    source: 'Instagram',
+    role: 'Client',
     type_client: 'Institution',
     domain: 'Formation',
     session_duration: 8,
@@ -224,6 +242,8 @@ export const guests: Guest[] = [
   {
     id: 'G005',
     name: 'StartupHub Ventures',
+    source: 'Twitter',
+    role: 'Partner',
     type_client: 'Entreprise',
     domain: 'Entrepreneuriat',
     session_duration: 15,
@@ -240,6 +260,8 @@ export const guests: Guest[] = [
     created_at: '2025-03-01',
   },
 ];
+
+export const guests: Guest[] = users;
 
 export const partners: Partner[] = [
   {

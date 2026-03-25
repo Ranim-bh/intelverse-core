@@ -18,7 +18,9 @@ export function KpiCard({ title, value, prefix = "", suffix = "", icon: Icon, tr
   return (
     <div className={`glass-card p-5 animate-slide-up ${alert ? 'border-destructive/50' : ''}`}>
       <div className="flex items-start justify-between mb-3">
-        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{title}</span>
+        <span className="text-[11px] sm:text-xs font-semibold text-muted-foreground tracking-wide leading-tight pr-3 break-words">
+          {title}
+        </span>
         <div className={`p-2 rounded-lg ${alert ? 'bg-destructive/20' : 'bg-primary/10'}`}>
           <Icon className={`h-4 w-4 ${alert ? 'text-destructive' : 'text-primary'}`} />
         </div>

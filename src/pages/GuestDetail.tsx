@@ -15,7 +15,7 @@ import {
   MessageSquare,
   ChevronRight,
   Zap,
-  Edit3,
+  RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -127,6 +127,14 @@ function deriveGuestData(guest: Guest, existingOffer?: AIOffer) {
     conversionProbability: Math.min(99, analysis.score + 5),
   };
 }
+
+const canRegenerate = (status: string) =>
+  status === "pending" ||
+  status === "approved" ||
+  status === "rejected" ||
+  status === "READY" ||
+  status === "DRAFT" ||
+  status === "PENDING";
 
 export default function GuestDetail() {
   const { id } = useParams<{ id: string }>();
@@ -392,9 +400,6 @@ export default function GuestDetail() {
                 <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getOfferStatusBadgeClasses(generatedOffer.status)}`}>
                   {getOfferStatusLabel(generatedOffer.status)}
                 </span>
-                <button className="p-1.5 text-slate-400 hover:text-primary hover:bg-white rounded-md transition-all">
-                  <Edit3 size={14} />
-                </button>
               </div>
               <h3 className="text-xl font-bold text-slate-900">{generatedOffer.title}</h3>
               <p className="text-xs text-slate-500 mt-1">For: {guest.name} ({guest.type_client})</p>
@@ -428,9 +433,17 @@ export default function GuestDetail() {
                 <p className="text-[10px] font-bold text-slate-400 uppercase">Confidence</p>
                 <p className="text-lg font-black text-slate-900">{generatedOffer.confidenceScore}%</p>
               </div>
-              <button className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50 transition-colors">
-                Review Offer
-              </button>
+              <div className="flex items-center gap-2">
+                {canRegenerate(String(generatedOffer.status)) && (
+                  <button className="flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 text-indigo-600 border border-indigo-200 rounded-lg text-[10px] font-bold hover:bg-indigo-100 transition-colors">
+                    <RefreshCw size={12} />
+                    Regenerate
+                  </button>
+                )}
+                <button className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50 transition-colors">
+                  Review Offer
+                </button>
+              </div>
             </div>
           </div>
         </div>

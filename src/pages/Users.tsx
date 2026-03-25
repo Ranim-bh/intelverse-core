@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { guests, MOCK_GUESTS } from "@/lib/mock-data";
+import { users, MOCK_GUESTS } from "@/lib/mock-data";
 import { analyzeGuest, getScoreBgColor } from "@/lib/scoring";
 import { getOfferStatusBadgeClasses, getOfferStatusLabel } from "@/lib/offer-status";
-import { Guest, GuestScore, GuestWithOffer } from "@/lib/types";
+import { Guest, GuestScore, GuestWithOffer, UserRole, UserSource } from "@/lib/types";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { Search, Sparkles, X, Send, ChevronRight, Package, Brain, Layers } from "lucide-react";
+import { Search, Sparkles, X, Mail, ChevronRight, Package, Brain, Layers, Instagram, Youtube, Linkedin } from "lucide-react";
 
 const statusSteps = ['Créé', 'Lobby', 'KPIs collectés', 'Offre envoyée', 'Converti'] as const;
 
@@ -29,49 +29,138 @@ const confidenceColor = (score: number) => {
   return 'text-red-500';
 };
 
-export default function Guests() {
+const roleBadgeClasses: Record<UserRole, string> = {
+  Guest: 'bg-slate-100 text-slate-700 border-slate-200',
+  Client: 'bg-blue-100 text-blue-700 border-blue-200',
+  Partner: 'bg-purple-100 text-purple-700 border-purple-200',
+};
+
+const sourceBadgeClasses: Record<UserSource, string> = {
+  LinkedIn: 'bg-blue-100 text-blue-700 border-blue-200',
+  Facebook: 'bg-indigo-100 text-indigo-700 border-indigo-200',
+  Instagram: 'bg-pink-100 text-pink-700 border-pink-200',
+  Twitter: 'bg-sky-100 text-sky-700 border-sky-200',
+  YouTube: 'bg-red-100 text-red-700 border-red-200',
+};
+
+const sourceFilters: Array<'all' | UserSource> = ['all', 'LinkedIn', 'Facebook', 'Instagram', 'Twitter', 'YouTube'];
+
+const getSourceIcon = (source: UserSource) => {
+  if (source === 'LinkedIn') return <Linkedin className="h-3 w-3" />;
+  if (source === 'Facebook') return <span className="text-[11px] font-bold leading-none">f</span>;
+  if (source === 'Instagram') return <Instagram className="h-3 w-3" />;
+  if (source === 'Twitter') return <span className="text-[11px] font-bold leading-none">X</span>;
+  return <Youtube className="h-3 w-3" />;
+};
+
+type OfferActionState = 'generate' | 'view';
+
+const getOfferActionState = (guest: Guest, guestWithOffer: GuestWithOffer | undefined): OfferActionState => {
+  if (guest.status === 'Converti') return 'view';
+  if (!guestWithOffer) return 'generate';
+  
+  const rawStatus = String(guestWithOffer.generatedOffer.status);
+
+  if (rawStatus === 'accepted' || rawStatus === 'Offre Acceptée') {
+    return 'view';
+  }
+
+  if (rawStatus === 'sent' || rawStatus === 'Offre Envoyée') {
+    return 'view';
+  }
+
+  if (rawStatus === 'pending' || rawStatus === 'approved' || rawStatus === 'READY' || rawStatus === 'DRAFT' || rawStatus === 'PENDING' || rawStatus === 'Offre Générée' || rawStatus === 'rejected' || rawStatus === 'Offre Refusée') {
+    return 'generate';
+  }
+
+  return 'generate';
+};
+
+const shouldHideOfferCta = (status: string) => {
+  const rawStatus = String(status);
+  return rawStatus === 'sent' ||
+    rawStatus === 'accepted' ||
+    rawStatus === 'rejected' ||
+    rawStatus === 'Offre Envoyée' ||
+    rawStatus === 'Offre Acceptée' ||
+    rawStatus === 'Offre Refusée';
+};
+
+export default function Users() {
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
-  const [filterType, setFilterType] = useState<string>("all");
+  const [filterRole, setFilterRole] = useState<string>("all");
+  const [filterSource, setFilterSource] = useState<'all' | UserSource>('all');
   const [selectedGuest, setSelectedGuest] = useState<Guest | null>(null);
   const [offerModal, setOfferModal] = useState<{ guest: Guest; analysis: GuestScore; aiGuest: GuestWithOffer | undefined } | null>(null);
 
-  const filtered = guests.filter(g => {
+  const filtered = users.filter(g => {
     const matchSearch = g.name.toLowerCase().includes(search.toLowerCase()) || g.id.toLowerCase().includes(search.toLowerCase());
-    const matchType = filterType === 'all' || g.type_client === filterType;
-    return matchSearch && matchType;
+    const matchRole = filterRole === 'all' || g.role === filterRole;
+    const matchSource = filterSource === 'all' || g.source === filterSource;
+    return matchSearch && matchRole && matchSource;
   });
 
   return (
     <div className="space-y-6 animate-fade-in">
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Gestion Guests</h1>
-        <p className="text-sm text-muted-foreground">Analyse IA et conversion des prospects</p>
+        <h1 className="text-2xl font-bold text-foreground">Users</h1>
+        <p className="text-sm text-muted-foreground">Unified list of guests, clients and partners.</p>
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap gap-3">
-        <div className="relative flex-1 min-w-[200px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <input
-            type="text"
-            placeholder="Rechercher un guest..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 bg-card border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-          />
+      <div className="space-y-3">
+        <div className="flex flex-wrap gap-3">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder="Search a user..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="w-full pl-9 pr-4 py-2 bg-card border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+          </div>
         </div>
-        <div className="flex gap-2">
-          {['all', 'Entreprise', 'Institution'].map(t => (
-            <button
-              key={t}
-              onClick={() => setFilterType(t)}
-              className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${filterType === t ? 'bg-primary text-primary-foreground' : 'bg-card border border-border text-muted-foreground hover:text-foreground'}`}
-            >
-              {t === 'all' ? 'Tous' : t}
-            </button>
-          ))}
+        
+        <div className="flex flex-wrap gap-3">
+          <div className="flex gap-2">
+            <span className="text-xs font-semibold text-muted-foreground uppercase pt-2">Role:</span>
+            {['all', 'Guest', 'Client', 'Partner'].map(r => (
+              <button
+                key={r}
+                onClick={() => setFilterRole(r)}
+                className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                  filterRole === r ? 'bg-primary text-primary-foreground' : 'bg-card border border-border text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {r === 'all' ? 'All Roles' : r}
+              </button>
+            ))}
+          </div>
         </div>
+
+        <div className="flex flex-wrap gap-3">
+          <div className="flex gap-2 flex-wrap">
+            <span className="text-xs font-semibold text-muted-foreground uppercase pt-2">Source:</span>
+            {sourceFilters.map((source) => (
+              <button
+                key={source}
+                onClick={() => setFilterSource(source)}
+                className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                  filterSource === source ? 'bg-primary text-primary-foreground' : 'bg-card border border-border text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {source === 'all' ? 'Tous' : source}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Results counter */}
+      <div className="text-sm text-muted-foreground">
+        Showing {filtered.length} user{filtered.length !== 1 ? 's' : ''}
       </div>
 
       {/* Table */}
@@ -82,6 +171,8 @@ export default function Guests() {
               <tr className="border-b border-border">
                 <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">ID</th>
                 <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Nom</th>
+                <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Role</th>
+                <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Source</th>
                 <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Type</th>
                 <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Session</th>
                 <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">Domaine</th>
@@ -91,9 +182,17 @@ export default function Guests() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((guest, i) => {
+              {filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={10} className="p-8 text-center text-muted-foreground">
+                    No users found matching your filters.
+                  </td>
+                </tr>
+              ) : (
+              filtered.map((guest, i) => {
                 const analysis = analyzeGuest(guest);
                 const aiGuest = MOCK_GUESTS.find(g => g.id === guest.id);
+                const offerActionState = getOfferActionState(guest, aiGuest);
                 return (
                   <tr
                     key={guest.id}
@@ -103,6 +202,17 @@ export default function Guests() {
                   >
                     <td className="p-4 font-mono text-xs text-muted-foreground">{guest.id}</td>
                     <td className="p-4 font-medium text-foreground">{guest.name}</td>
+                    <td className="p-4">
+                      <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${roleBadgeClasses[guest.role]}`}>
+                        {guest.role}
+                      </span>
+                    </td>
+                    <td className="p-4">
+                      <span className={`inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full border font-medium ${sourceBadgeClasses[guest.source]}`}>
+                        {getSourceIcon(guest.source)}
+                        {guest.source}
+                      </span>
+                    </td>
                     <td className="p-4">
                       <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">{guest.type_client}</span>
                     </td>
@@ -114,22 +224,39 @@ export default function Guests() {
                       </span>
                     </td>
                     <td className="p-4">
-                      <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${getGuestStatusBadgeClasses(guest.status)}`}>
-                        {getGuestStatusLabel(guest.status)}
-                      </span>
+                      {aiGuest ? (
+                        <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${getOfferStatusBadgeClasses(aiGuest.generatedOffer.status)}`}>
+                          {getOfferStatusLabel(aiGuest.generatedOffer.status)}
+                        </span>
+                      ) : (
+                        <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${getGuestStatusBadgeClasses(guest.status)}`}>
+                          {getGuestStatusLabel(guest.status)}
+                        </span>
+                      )}
                     </td>
                     <td className="p-4">
-                      <button
-                        onClick={e => { e.stopPropagation(); setOfferModal({ guest, analysis, aiGuest }); }}
-                        className="flex items-center gap-1 px-3 py-1.5 bg-primary/10 text-primary rounded-lg text-xs font-medium hover:bg-primary/20 transition-colors"
-                      >
-                        <Sparkles className="h-3 w-3" />
-                        Offre IA
-                      </button>
+                      {offerActionState === 'generate' && (
+                        <button
+                          onClick={e => { e.stopPropagation(); setOfferModal({ guest, analysis, aiGuest }); }}
+                          className="flex items-center gap-1 px-3 py-1.5 bg-primary/10 text-primary rounded-lg text-xs font-medium hover:bg-primary/20 transition-colors"
+                        >
+                          <Sparkles className="h-3 w-3" />
+                          Generate Offer
+                        </button>
+                      )}
+                      {offerActionState === 'view' && (
+                        <button
+                          onClick={e => { e.stopPropagation(); setOfferModal({ guest, analysis, aiGuest }); }}
+                          className="flex items-center gap-1 px-3 py-1.5 bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-xs font-medium hover:bg-blue-50 transition-colors"
+                        >
+                          👁️ View Offre
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );
-              })}
+              })
+              )}
             </tbody>
           </table>
         </div>
@@ -273,10 +400,12 @@ export default function Guests() {
                 </div>
 
                 {/* CTA */}
-                <button className="w-full flex items-center justify-center gap-2 bg-primary hover:opacity-90 text-primary-foreground rounded-xl py-3 text-sm font-bold transition-colors shadow-sm">
-                  <Send className="h-4 w-4" />
-                  Envoyer l'offre via Chatbot
-                </button>
+                {!shouldHideOfferCta(String(offerModal.aiGuest.generatedOffer.status)) && (
+                  <button className="w-full flex items-center justify-center gap-2 bg-primary hover:opacity-90 text-primary-foreground rounded-xl py-3 text-sm font-bold transition-colors shadow-sm">
+                    <Mail className="h-4 w-4" />
+                    Envoyer via Email
+                  </button>
+                )}
               </div>
             ) : (
               <div className="p-6 space-y-4">
@@ -294,8 +423,8 @@ export default function Guests() {
                   <p className="text-sm text-slate-700 leading-relaxed">{offerModal.analysis.offer}</p>
                 </div>
                 <button className="w-full flex items-center justify-center gap-2 bg-primary text-primary-foreground rounded-xl py-3 text-sm font-bold hover:opacity-90 transition-colors">
-                  <Send className="h-4 w-4" />
-                  Envoyer via Chatbot
+                  <Mail className="h-4 w-4" />
+                  Envoyer via Email
                 </button>
               </div>
             )}

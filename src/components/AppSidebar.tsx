@@ -24,7 +24,7 @@ import {
 
 const navItems = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
-  { title: "Guests", url: "/guests", icon: Users },
+  { title: "Users", url: "/guests", icon: Users },
   { title: "Partenaires", url: "/partners", icon: Handshake },
   { title: "AI Offers", url: "/ai-offers", icon: Sparkles },
   { title: "Anti-Churn", url: "/anti-churn", icon: ShieldAlert },

@@ -15,7 +15,7 @@ export function getOfferStatusLabel(status: OfferStatusLike | string): string {
     case "accepted":
       return "🟢 Offre Acceptée";
     case "rejected":
-      return "🔴 Offre Supprimée";
+      return "🔴 Offre Refusée";
     default:
       return "🟡 Offre Générée";
   }

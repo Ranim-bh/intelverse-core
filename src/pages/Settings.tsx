@@ -1,8 +1,53 @@
 import { useMemo, useState } from "react";
-import { Bell, User } from "lucide-react";
+import { Bell, User, Lock, SlidersHorizontal } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
 
-type SettingsSection = "profile" | "notifications";
+type SettingsSection = "profile" | "notifications" | "roles" | "lead-scoring";
+
+type Service = "Training Center" | "Pitch Room" | "Showcase Room" | "Opportunity Room";
+type Role = "Guest" | "Client" | "Partenaire";
+
+type RoleServiceAccess = Record<Role, Record<Service, boolean>>;
+
+type LeadScoringWeights = {
+  sessionDuration: number;
+  roomsVisited: number;
+  voiceTime: number;
+  interactions: number;
+  idleTime: number;
+};
+
+const defaultRoleServiceAccess: RoleServiceAccess = {
+  Guest: {
+    "Showcase Room": true,
+    "Training Center": false,
+    "Pitch Room": false,
+    "Opportunity Room": false,
+  },
+  Client: {
+    "Showcase Room": true,
+    "Training Center": true,
+    "Pitch Room": false,
+    "Opportunity Room": true,
+  },
+  Partenaire: {
+    "Showcase Room": true,
+    "Training Center": true,
+    "Pitch Room": true,
+    "Opportunity Room": true,
+  },
+};
+
+const services: Service[] = ["Training Center", "Pitch Room", "Showcase Room", "Opportunity Room"];
+const roles: Role[] = ["Guest", "Client", "Partenaire"];
+
+const defaultLeadScoringWeights: LeadScoringWeights = {
+  sessionDuration: 35,
+  roomsVisited: 25,
+  voiceTime: 20,
+  interactions: 15,
+  idleTime: 0,
+};
 
 type ProfileFormState = {
   fullName: string;
@@ -20,11 +65,36 @@ type NotificationState = {
   criticalAntiChurnSignal: boolean;
   weeklyPerformanceReport: boolean;
   upsellingOpportunityDetected: boolean;
-  autoSendMediumRisk: boolean;
-  autoSendHighRisk: boolean;
-  requireAdminApprovalCritical: boolean;
-  sendFollowUpJ2: boolean;
-  chatbotApiKey: string;
+};
+
+type RolePermission = {
+  role: "Guest" | "Client" | "Partner";
+  description: string;
+  rooms: string[];
+};
+
+const rolePermissions: RolePermission[] = [
+  {
+    role: "Guest",
+    description: "Basic exploration access for first-time users.",
+    rooms: ["Lobby", "Showcase Room"],
+  },
+  {
+    role: "Client",
+    description: "Extended product and opportunity access for active clients.",
+    rooms: ["Lobby", "Showcase Room", "Training Center", "Opportunity Room"],
+  },
+  {
+    role: "Partner",
+    description: "Full platform access for strategic collaboration and pitching.",
+    rooms: ["Lobby", "Showcase Room", "Training Center", "Opportunity Room", "Pitch Room"],
+  },
+];
+
+const roleCardStyles: Record<RolePermission["role"], string> = {
+  Guest: "border-slate-200 bg-slate-50",
+  Client: "border-blue-200 bg-blue-50",
+  Partner: "border-purple-200 bg-purple-50",
 };
 
 function SettingsSwitch({ checked, onToggle }: { checked: boolean; onToggle: () => void }) {
@@ -63,6 +133,8 @@ function getPasswordStrength(password: string): number {
 
 export default function Settings() {
   const [activeSection, setActiveSection] = useState<SettingsSection>("profile");
+  const [roleServiceAccess, setRoleServiceAccess] = useState<RoleServiceAccess>(defaultRoleServiceAccess);
+  const [leadScoringWeights, setLeadScoringWeights] = useState<LeadScoringWeights>(defaultLeadScoringWeights);
   const [profileForm, setProfileForm] = useState<ProfileFormState>({
     fullName: "Admin TalentVerse",
     jobTitle: "Platform Manager",
@@ -78,11 +150,6 @@ export default function Settings() {
     criticalAntiChurnSignal: true,
     weeklyPerformanceReport: false,
     upsellingOpportunityDetected: false,
-    autoSendMediumRisk: true,
-    autoSendHighRisk: true,
-    requireAdminApprovalCritical: true,
-    sendFollowUpJ2: false,
-    chatbotApiKey: "",
   });
 
   const initials = useMemo(() => {
@@ -101,9 +168,39 @@ export default function Settings() {
     toast.success("Changes saved!", { duration: 2000, position: "bottom-right" });
   };
 
-  const profileNavItems: Array<{ id: SettingsSection; label: string; icon: typeof User }> = [
+  const toggleServiceAccess = (role: Role, service: Service) => {
+    setRoleServiceAccess((prev) => ({
+      ...prev,
+      [role]: {
+        ...prev[role],
+        [service]: !prev[role][service],
+      },
+    }));
+    toast.success("Access updated", { duration: 2000, position: "bottom-right" });
+  };
+
+  const resetAccessDefaults = () => {
+    setRoleServiceAccess(defaultRoleServiceAccess);
+    toast.success("Access reset to defaults", { duration: 2000, position: "bottom-right" });
+  };
+
+  const setLeadWeight = (key: keyof LeadScoringWeights, value: number) => {
+    const safeValue = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
+    setLeadScoringWeights((prev) => ({
+      ...prev,
+      [key]: safeValue,
+    }));
+  };
+
+  const saveLeadScoring = () => {
+    toast.success("Lead scoring updated", { duration: 2000, position: "bottom-right" });
+  };
+
+  const profileNavItems: Array<{ id: SettingsSection; label: string; icon: typeof User | typeof Lock | typeof SlidersHorizontal }> = [
     { id: "profile", label: "Admin Profile", icon: User },
     { id: "notifications", label: "Notifications", icon: Bell },
+    { id: "lead-scoring", label: "Lead Scoring", icon: SlidersHorizontal },
+    { id: "roles", label: "Roles & Access", icon: Lock },
   ];
 
   return (
@@ -135,7 +232,7 @@ export default function Settings() {
           </nav>
         </aside>
 
-        <section className="flex-1 bg-white p-8">
+        <section className="flex-1 bg-white p-8 overflow-y-auto">
           {activeSection === "profile" ? (
             <div>
               <div className="mb-6">
@@ -279,6 +376,166 @@ export default function Settings() {
                   Update Password
                 </button>
               </div>
+
+              <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <h3 className="mb-2 text-base font-bold text-slate-900">Roles &amp; Permissions</h3>
+                <p className="mb-6 text-sm text-slate-500">Default room access by role.</p>
+
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                  {rolePermissions.map((item) => (
+                    <div key={item.role} className={`rounded-xl border p-4 ${roleCardStyles[item.role]}`}>
+                      <h4 className="text-sm font-bold text-slate-900">{item.role}</h4>
+                      <p className="mt-1 text-xs leading-relaxed text-slate-600">{item.description}</p>
+
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {item.rooms.map((room) => (
+                          <span
+                            key={`${item.role}-${room}`}
+                            className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700"
+                          >
+                            {room}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : activeSection === "roles" ? (
+            <div>
+              <div className="mb-6">
+                <h1 className="text-2xl font-bold text-slate-900">Roles & Services Access</h1>
+                <p className="text-sm text-slate-500">Configure which services each role can access.</p>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="mb-6 flex items-center justify-between">
+                  <h3 className="text-base font-bold text-slate-900">Access Matrix</h3>
+                  <button
+                    type="button"
+                    onClick={resetAccessDefaults}
+                    className="text-sm font-medium text-indigo-600 hover:text-indigo-700"
+                  >
+                    Reset to Defaults
+                  </button>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200">
+                        <th className="px-4 py-3 text-left font-semibold text-slate-700">Role</th>
+                        {services.map((service) => (
+                          <th key={service} className="px-4 py-3 text-center font-semibold text-slate-700">
+                            {service}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {roles.map((role) => (
+                        <tr key={role} className="border-b border-slate-100 hover:bg-slate-50">
+                          <td className="px-4 py-4 font-medium text-slate-900">{role}</td>
+                          {services.map((service) => (
+                            <td key={`${role}-${service}`} className="px-4 py-4 text-center">
+                              <SettingsSwitch
+                                checked={roleServiceAccess[role][service]}
+                                onToggle={() => toggleServiceAccess(role, service)}
+                              />
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          ) : activeSection === "lead-scoring" ? (
+            <div>
+              <div className="mb-6">
+                <h1 className="text-2xl font-bold text-slate-900">Lead Scoring</h1>
+                <p className="text-sm text-slate-500">Adjust scoring weights used to prioritize leads.</p>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200">
+                        <th className="px-4 py-3 text-left font-semibold text-slate-700">Critere</th>
+                        <th className="px-4 py-3 text-left font-semibold text-slate-700">Poids</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[
+                        { key: "sessionDuration" as const, label: "Duree session" },
+                        { key: "roomsVisited" as const, label: "Rooms visitees" },
+                        { key: "voiceTime" as const, label: "Temps vocal" },
+                        { key: "interactions" as const, label: "Interactions" },
+                        { key: "idleTime" as const, label: "Idle time" },
+                      ].map((item) => (
+                        <tr key={item.key} className="border-b border-slate-100 last:border-b-0">
+                          <td className="px-4 py-4 font-medium text-slate-900">{item.label}</td>
+                          <td className="px-4 py-4">
+                            <div className="flex items-center gap-3">
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                value={leadScoringWeights[item.key]}
+                                onChange={(event) => setLeadWeight(item.key, Number(event.target.value))}
+                                className="h-2 w-full cursor-pointer accent-indigo-600"
+                              />
+                              <div className="flex w-20 items-center gap-1">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={100}
+                                  value={leadScoringWeights[item.key]}
+                                  onChange={(event) => setLeadWeight(item.key, Number(event.target.value))}
+                                  className="w-14 rounded-lg border border-slate-200 px-2 py-1 text-right text-sm text-slate-900 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                />
+                                <span className="text-slate-500">%</span>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="mt-6 flex items-center justify-between rounded-lg bg-slate-50 px-4 py-3">
+                  <span className="text-sm text-slate-600">Total des poids</span>
+                  <span className="text-sm font-bold text-slate-900">
+                    {leadScoringWeights.sessionDuration +
+                      leadScoringWeights.roomsVisited +
+                      leadScoringWeights.voiceTime +
+                      leadScoringWeights.interactions +
+                      leadScoringWeights.idleTime}
+                    %
+                  </span>
+                </div>
+
+                <div className="mt-6 flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setLeadScoringWeights(defaultLeadScoringWeights)}
+                    className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Reset
+                  </button>
+                  <button
+                    type="button"
+                    onClick={saveLeadScoring}
+                    className="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+                  >
+                    Save Weights
+                  </button>
+                </div>
+              </div>
             </div>
           ) : (
             <div>
@@ -351,72 +608,6 @@ export default function Settings() {
                 </button>
               </div>
 
-              <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <h3 className="mb-6 text-base font-bold text-slate-900">Chatbot Alerts</h3>
-
-                <div className="space-y-4">
-                  {[
-                    {
-                      key: "autoSendMediumRisk",
-                      label: "Auto-send chatbot message on Medium risk",
-                    },
-                    {
-                      key: "autoSendHighRisk",
-                      label: "Auto-send chatbot message on High risk",
-                    },
-                    {
-                      key: "requireAdminApprovalCritical",
-                      label: "Require admin approval for Critical actions",
-                    },
-                    {
-                      key: "sendFollowUpJ2",
-                      label: "Send chatbot follow-up after J+2 no response",
-                    },
-                  ].map((item) => (
-                    <div key={item.key} className="flex items-center justify-between gap-4 rounded-lg border border-slate-100 bg-slate-50/70 px-3 py-2.5">
-                      <span className="text-sm text-slate-700 leading-snug">{item.label}</span>
-                      <SettingsSwitch
-                        checked={notifications[item.key as keyof NotificationState] as boolean}
-                        onToggle={() =>
-                          setNotifications((prev) => ({
-                            ...prev,
-                            [item.key]: !prev[item.key as keyof NotificationState],
-                          }))
-                        }
-                      />
-                    </div>
-                  ))}
-                </div>
-
-                <div className="mt-6">
-                  <label className="mb-2 block text-sm font-medium text-slate-700">Chatbot API Key</label>
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="password"
-                      placeholder="sk-••••••••"
-                      value={notifications.chatbotApiKey}
-                      onChange={(event) =>
-                        setNotifications((prev) => ({
-                          ...prev,
-                          chatbotApiKey: event.target.value,
-                        }))
-                      }
-                      className="w-full rounded-lg border border-slate-200 px-4 py-2.5 text-sm text-slate-900 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                    <button type="button" className="shrink-0 text-xs font-medium text-indigo-600">
-                      Test Connection
-                    </button>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={saveChanges}
-                  className="mt-6 rounded-lg bg-indigo-600 px-6 py-2 text-sm font-medium text-white hover:bg-indigo-700"
-                >
-                  Save Changes
-                </button>
-              </div>
             </div>
           )}
         </section>

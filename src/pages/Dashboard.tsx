@@ -46,9 +46,9 @@ export default function Dashboard() {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-        <KpiCard title="MRR" value={latestMetric.mrr} prefix="€" icon={DollarSign} trend={mrrTrend} />
-        <KpiCard title="CAC" value={latestMetric.cac} prefix="€" icon={Target} trend={-cacTrend} />
-        <KpiCard title="LTV" value={latestMetric.ltv} prefix="€" icon={TrendingUp} trend={ltvTrend} />
+        <KpiCard title="Monthly Recurring Revenue" value={latestMetric.mrr} prefix="€" icon={DollarSign} trend={mrrTrend} />
+        <KpiCard title="Customer Acquisition Cost" value={latestMetric.cac} prefix="€" icon={Target} trend={-cacTrend} />
+        <KpiCard title="Customer Lifetime Value" value={latestMetric.ltv} prefix="€" icon={TrendingUp} trend={ltvTrend} />
         <KpiCard title="Churn Rate" value={latestMetric.churn_rate} suffix="%" icon={AlertTriangle} alert={latestMetric.churn_rate > 10} decimals={1} />
         <KpiCard title="Conversion" value={latestMetric.conversion_rate} suffix="%" icon={BarChart3} trend={Math.round(((latestMetric.conversion_rate - prevMetric.conversion_rate) / prevMetric.conversion_rate) * 100)} />
       </div>

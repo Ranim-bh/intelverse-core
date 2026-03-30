@@ -1,23 +1,33 @@
+import { useMemo } from "react";
 import { DollarSign, Target, TrendingUp, AlertTriangle, BarChart3 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { KpiCard } from "@/components/dashboard/KpiCard";
-import { businessMetrics, guests, partners, churnProfiles } from "@/lib/mock-data";
+import { useAppData } from "@/lib/db-client";
 import { analyzeGuest, getRiskBadgeColor } from "@/lib/scoring";
 
-const latestMetric = businessMetrics[businessMetrics.length - 1];
-const prevMetric = businessMetrics[businessMetrics.length - 2];
-
-const mrrTrend = Math.round(((latestMetric.mrr - prevMetric.mrr) / prevMetric.mrr) * 100);
-const cacTrend = Math.round(((latestMetric.cac - prevMetric.cac) / prevMetric.cac) * 100);
-const ltvTrend = Math.round(((latestMetric.ltv - prevMetric.ltv) / prevMetric.ltv) * 100);
-
-const totalGuests = guests.length;
-const convertedGuests = guests.filter(g => g.status === 'Converti').length;
-const totalPartners = partners.length;
-const fiablePartners = partners.filter(p => p.level === 'Partenaire Fiable').length;
-const atRiskProfiles = churnProfiles.filter(c => !c.recovered && (c.risk_level === 'high' || c.risk_level === 'critical'));
-
 export default function Dashboard() {
+  const { data } = useAppData();
+  const guests = data.guests;
+  const partners = data.partners;
+
+  const mockBusinessMetrics = [
+    { mrr: 50000, cac: 500, ltv: 5000, churn_rate: 3, conversion_rate: 12 },
+    { mrr: 52000, cac: 480, ltv: 5200, churn_rate: 2.8, conversion_rate: 13 },
+  ];
+
+  const latestMetric = mockBusinessMetrics[mockBusinessMetrics.length - 1];
+  const prevMetric = mockBusinessMetrics[mockBusinessMetrics.length - 2];
+
+  const mrrTrend = Math.round(((latestMetric.mrr - prevMetric.mrr) / prevMetric.mrr) * 100);
+  const cacTrend = Math.round(((latestMetric.cac - prevMetric.cac) / prevMetric.cac) * 100);
+  const ltvTrend = Math.round(((latestMetric.ltv - prevMetric.ltv) / prevMetric.ltv) * 100);
+
+  const totalGuests = guests.length;
+  const convertedGuests = guests.filter(g => g.status === 'Converti').length;
+  const totalPartners = partners.length;
+  const fiablePartners = partners.filter(p => (p as unknown as Record<string, unknown>).level === 'Partenaire Fiable').length;
+  const atRiskProfiles: unknown[] = [];
+
   return (
     <div className="space-y-6 animate-fade-in">
       <div>

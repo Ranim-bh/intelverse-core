@@ -1,8 +1,13 @@
 import express from "express";
+import type { Request, Response } from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import Groq from "groq-sdk";
-import { loadDataset as loadTable, loadDatasets as loadTables } from "./services/datasetLoader.js";
+import {
+  loadDataset as loadTable,
+  loadDatasets as loadTables,
+  type DatasetsMap,
+} from "./services/datasetLoader.js";
 import { getGuestScore, recommendForGuest } from "./services/recommendationEngine.js";
 
 dotenv.config();
@@ -564,8 +569,14 @@ app.listen(PORT, () => {
 
 loadTables().then((tables) => {
   const keys = Object.keys(tables);
-  console.log(`PostgreSQL tables loaded at startup: ${keys.length ? keys.join(", ") : "none"}`);
+  console.log(
+    `PostgreSQL tables loaded at startup: ${
+      keys.length ? keys.join(", ") : "none"
+    }`
+  );
 }).catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
   console.warn(`Database preload failed: ${message}`);
 });
+
+export default app;

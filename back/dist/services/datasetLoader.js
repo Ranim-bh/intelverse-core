@@ -1,46 +1,11 @@
 import { Pool } from "pg";
+import { queryDb } from "./db.js";
 let cache = null;
-let pool = null;
 const normalizeTableName = (value) => value
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
-const buildPoolConfig = () => {
-    const databaseUrl = (process.env.DATABASE_URL ?? "").trim();
-    if (databaseUrl) {
-        return {
-            connectionString: databaseUrl,
-            ssl: (process.env.PG_SSL ?? "false").toLowerCase() === "true"
-                ? { rejectUnauthorized: false }
-                : false,
-        };
-    }
-    const host = (process.env.PGHOST ?? "").trim();
-    const user = (process.env.PGUSER ?? "").trim();
-    const password = process.env.PGPASSWORD ?? "";
-    const database = (process.env.PGDATABASE ?? "").trim();
-    const port = Number(process.env.PGPORT ?? 5432);
-    if (!host || !user || !database) {
-        throw new Error("Missing PostgreSQL configuration. Set DATABASE_URL or PGHOST/PGUSER/PGPASSWORD/PGDATABASE/PGPORT in back/.env");
-    }
-    return {
-        host,
-        user,
-        password,
-        database,
-        port: Number.isFinite(port) ? port : 5432,
-        ssl: (process.env.PG_SSL ?? "false").toLowerCase() === "true"
-            ? { rejectUnauthorized: false }
-            : false,
-    };
-};
-const ensurePool = () => {
-    if (pool)
-        return pool;
-    pool = new Pool(buildPoolConfig());
-    return pool;
-};
 const toSafeIdentifier = (name) => {
     if (!/^[a-zA-Z0-9_]+$/.test(name)) {
         throw new Error(`Unsupported table name '${name}'`);
@@ -59,14 +24,16 @@ const normalizeRow = (row) => {
     return normalized;
 };
 const getTableNames = async (client) => {
-    const result = await client.query(`
+    const result = await queryDb(`
     SELECT table_name
     FROM information_schema.tables
     WHERE table_schema = 'public'
       AND table_type IN ('BASE TABLE', 'VIEW')
     ORDER BY table_name ASC
   `);
-    return result.rows.map((row) => row.table_name).filter(Boolean);
+    return result.rows
+        .map((row) => row.table_name)
+        .filter(Boolean);
 };
 const getConfiguredTables = () => {
     const raw = String(process.env.TABLES_LIST ?? process.env.DATASET_TABLES ?? "").trim();
@@ -82,13 +49,13 @@ const getConfiguredTables = () => {
 };
 const loadSingleTable = async (client, tableName) => {
     const safeName = toSafeIdentifier(tableName);
-    const result = await client.query(`SELECT * FROM ${safeName}`);
+    const result = await queryDb(`SELECT * FROM ${safeName}`);
     return result.rows.map(normalizeRow);
 };
 export const loadDatasets = async (forceRefresh = false) => {
     if (cache && !forceRefresh)
         return cache;
-    const client = ensurePool();
+    const client = new Pool();
     const tableNames = await getTableNames(client);
     const allowedTables = getConfiguredTables();
     const loaded = {};

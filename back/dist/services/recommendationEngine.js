@@ -47,10 +47,6 @@ const resolveTier = (score) => {
         return { tier: "Trio", nb_rooms: 3 };
     return { tier: "All-Access", nb_rooms: 4 };
 };
-const parseCsvList = (value) => value
-    .split(",")
-    .map((v) => v.trim())
-    .filter(Boolean);
 const parseGroqJson = (raw) => {
     const fenced = raw.replace(/```json|```/g, "").trim();
     try {
@@ -72,9 +68,18 @@ const resolveTables = async () => {
     WHERE table_schema='public'
       AND table_type='BASE TABLE'
   `);
-    const names = new Set(result.rows.map((r) => String(r.table_name).toLowerCase()));
-    const guestTable = names.has("guest") ? "guest" : (names.has("guest_kpis") ? "guest_kpis" : "");
-    const servicesTable = names.has("services") ? "services" : (names.has("service") ? "service" : "");
+    const names = new Set(result.rows
+        .map((r) => String(r.table_name).toLowerCase()));
+    const guestTable = names.has("guest")
+        ? "guest"
+        : names.has("guest_kpis")
+            ? "guest_kpis"
+            : "";
+    const servicesTable = names.has("services")
+        ? "services"
+        : names.has("service")
+            ? "service"
+            : "";
     const roomKpiTable = names.has("room_kpi") ? "room_kpi" : "";
     const packTable = names.has("pack") ? "pack" : "";
     const packServiceTable = names.has("pack_service") ? "pack_service" : "";
@@ -92,7 +97,8 @@ const resolveTables = async () => {
     FROM information_schema.columns
     WHERE table_schema='public' AND table_name=$1
   `, [servicesTable]);
-    const serviceColumns = new Set(serviceColumnsResult.rows.map((r) => String(r.column_name).toLowerCase()));
+    const serviceColumns = new Set(serviceColumnsResult.rows
+        .map((r) => String(r.column_name).toLowerCase()));
     const servicesLabelColumn = serviceColumns.has("service")
         ? "service"
         : serviceColumns.has("service_name")
@@ -100,340 +106,48 @@ const resolveTables = async () => {
             : serviceColumns.has("name")
                 ? "name"
                 : "service_id";
-    return { guestTable, servicesTable, servicesLabelColumn, usersTable, roomKpiTable, packTable, packServiceTable };
-};
-const fetchGuestKpis = async (guestId, tables) => {
-    const guestTable = quoteIdentifier(tables.guestTable);
-    const guest = tables.guestTable === "guest_kpis"
-        ? await queryDb(`
-      SELECT
-        user_id AS id,
-        session_duration,
-        interaction_count,
-        room_click_rate,
-        voice_interaction_time,
-        customization_time,
-        idle_time,
-        NULL::text AS most_viewed_room,
-        NULL::text AS rooms_viewed,
-        navigation_path
-      FROM ${guestTable}
-      WHERE user_id = $1
-      ORDER BY calculated_at DESC NULLS LAST
-      LIMIT 1
-    `, [guestId])
-        : await queryDb(`
-      SELECT
-        id,
-        session_duration,
-        interaction_count,
-        room_click_rate,
-        voice_interaction_time,
-        customization_time,
-        idle_time,
-        most_viewed_room,
-        rooms_viewed,
-        navigation_path
-      FROM ${guestTable}
-      WHERE id = $1
-      LIMIT 1
-    `, [guestId]);
-    if (!guest.rows[0]) {
-        if (tables.usersTable) {
-            const usersTable = quoteIdentifier(tables.usersTable);
-            const userExists = await queryDb(`
-        SELECT EXISTS(
-          SELECT 1 FROM ${usersTable} WHERE user_id = $1
-        ) AS exists
-      `, [guestId]);
-            if (userExists.rows[0]?.exists) {
-                return {
-                    id: guestId,
-                    session_duration: 0,
-                    interaction_count: 0,
-                    room_click_rate: 0,
-                    voice_interaction_time: 0,
-                    customization_time: 0,
-                    idle_time: 0,
-                    most_viewed_room: null,
-                    rooms_viewed: null,
-                    navigation_path: null,
-                };
-            }
-        }
-        const err = new Error(`Guest '${guestId}' not found`);
-        err.status = 404;
-        throw err;
-    }
-    return guest.rows[0];
-};
-const fetchRoomKpis = async (guestId, tables) => {
-    const roomKpiTable = quoteIdentifier(tables.roomKpiTable);
-    const servicesTable = quoteIdentifier(tables.servicesTable);
-    const servicesLabelColumn = quoteIdentifier(tables.servicesLabelColumn);
-    const roomRows = await queryDb(`
-    SELECT
-      rk.service_id,
-      s.${servicesLabelColumn} AS room_name,
-      SUM(rk.temps_total)::numeric AS total_time_in_room,
-      SUM(rk.nb_interactions)::numeric AS total_interactions_in_room,
-      SUM(rk.nb_participants)::numeric AS total_participants_in_room,
-      COUNT(rk.kpi_id)::numeric AS nb_sessions_in_room
-    FROM ${roomKpiTable} rk
-    JOIN ${servicesTable} s ON s.service_id = rk.service_id
-    WHERE rk.user_id = $1
-    GROUP BY rk.service_id, s.${servicesLabelColumn}
-    ORDER BY total_time_in_room DESC
-  `, [guestId]);
-    return roomRows.rows.map((row) => ({
-        ...row,
-        total_time_in_room: toNum(row.total_time_in_room),
-        total_interactions_in_room: toNum(row.total_interactions_in_room),
-        total_participants_in_room: toNum(row.total_participants_in_room),
-        nb_sessions_in_room: toNum(row.nb_sessions_in_room),
-    }));
-};
-const fetchBounds = async (tables) => {
-    const guestTable = quoteIdentifier(tables.guestTable);
-    const roomKpiTable = quoteIdentifier(tables.roomKpiTable);
-    const guestBounds = await queryDb(`
-    SELECT
-      MAX(session_duration)::numeric AS max_sd,
-      MAX(interaction_count)::numeric AS max_ic,
-      MAX(room_click_rate::numeric)::numeric AS max_rcr,
-      MAX(voice_interaction_time)::numeric AS max_vit,
-      MAX(customization_time)::numeric AS max_ct,
-      MAX(idle_time)::numeric AS max_it
-    FROM ${guestTable}
-  `);
-    const roomBounds = await queryDb(`
-    SELECT
-      MAX(room_time)::numeric AS max_room_time,
-      MAX(room_interactions)::numeric AS max_room_int,
-      MAX(room_sessions)::numeric AS max_room_sess
-    FROM (
-      SELECT
-        user_id,
-        service_id,
-        SUM(temps_total) AS room_time,
-        SUM(nb_interactions) AS room_interactions,
-        COUNT(kpi_id) AS room_sessions
-      FROM ${roomKpiTable}
-      GROUP BY user_id, service_id
-    ) t
-  `);
     return {
-        guestBounds: guestBounds.rows[0] ?? {
-            max_sd: 0,
-            max_ic: 0,
-            max_rcr: 0,
-            max_vit: 0,
-            max_ct: 0,
-            max_it: 0,
-        },
-        roomBounds: roomBounds.rows[0] ?? {
-            max_room_time: 0,
-            max_room_int: 0,
-            max_room_sess: 0,
-        },
-    };
-};
-const fetchPacksForTier = async (nbRooms, tables) => {
-    const packTable = quoteIdentifier(tables.packTable);
-    const packServiceTable = quoteIdentifier(tables.packServiceTable);
-    const servicesTable = quoteIdentifier(tables.servicesTable);
-    const servicesLabelColumn = quoteIdentifier(tables.servicesLabelColumn);
-    const packs = await queryDb(`
-    SELECT
-      p.pack_id,
-      p.pack_name,
-      p.pack_code,
-      p.nb_rooms,
-      p.description,
-      string_agg(s.service_id, ',' ORDER BY s.service_id) AS service_ids,
-      string_agg(s.${servicesLabelColumn}, ', ' ORDER BY s.${servicesLabelColumn}) AS service_names
-    FROM ${packTable} p
-    JOIN ${packServiceTable} ps ON ps.pack_id = p.pack_id
-    JOIN ${servicesTable} s ON s.service_id = ps.service_id
-    WHERE p.nb_rooms = $1
-    GROUP BY p.pack_id, p.pack_name, p.pack_code, p.nb_rooms, p.description
-  `, [nbRooms]);
-    if (packs.rows.length) {
-        return packs.rows;
-    }
-    // Fallback when pack_service has no rows: still use pack catalog by tier.
-    const packOnly = await queryDb(`
-    SELECT
-      p.pack_id,
-      p.pack_name,
-      p.pack_code,
-      p.nb_rooms,
-      p.description
-    FROM ${packTable} p
-    WHERE p.nb_rooms = $1
-    ORDER BY p.pack_code
-  `, [nbRooms]);
-    if (!packOnly.rows.length) {
-        const err = new Error("Pack table is empty for requested tier");
-        err.status = 500;
-        throw err;
-    }
-    return packOnly.rows.map((row) => ({
-        ...row,
-        service_ids: "",
-        service_names: "",
-    }));
-};
-const fetchPackByCode = async (packCode, tables) => {
-    const packTable = quoteIdentifier(tables.packTable);
-    const packServiceTable = quoteIdentifier(tables.packServiceTable);
-    const servicesTable = quoteIdentifier(tables.servicesTable);
-    const servicesLabelColumn = quoteIdentifier(tables.servicesLabelColumn);
-    const selected = await queryDb(`
-    SELECT
-      p.pack_id,
-      p.pack_name,
-      p.pack_code,
-      p.nb_rooms,
-      p.description,
-      string_agg(s.service_id, ',' ORDER BY s.service_id) AS service_ids,
-      string_agg(s.${servicesLabelColumn}, ', ' ORDER BY s.${servicesLabelColumn}) AS service_names
-    FROM ${packTable} p
-    JOIN ${packServiceTable} ps ON ps.pack_id = p.pack_id
-    JOIN ${servicesTable} s ON s.service_id = ps.service_id
-    WHERE p.pack_code = $1
-    GROUP BY p.pack_id, p.pack_name, p.pack_code, p.nb_rooms, p.description
-    LIMIT 1
-  `, [packCode]);
-    if (selected.rows[0])
-        return selected.rows[0];
-    const packOnly = await queryDb(`
-    SELECT
-      p.pack_id,
-      p.pack_name,
-      p.pack_code,
-      p.nb_rooms,
-      p.description
-    FROM ${packTable} p
-    WHERE p.pack_code = $1
-    LIMIT 1
-  `, [packCode]);
-    const row = packOnly.rows[0];
-    if (!row)
-        return undefined;
-    return {
-        ...row,
-        service_ids: "",
-        service_names: "",
-    };
-};
-const computeScore = async (guestId) => {
-    const tables = await resolveTables();
-    const guest = await fetchGuestKpis(guestId, tables);
-    const roomRows = await fetchRoomKpis(guestId, tables);
-    const { guestBounds, roomBounds } = await fetchBounds(tables);
-    const guestScore = normalize(toNum(guest.session_duration), toNum(guestBounds.max_sd)) * WEIGHTS.session_duration +
-        normalize(toNum(guest.interaction_count), toNum(guestBounds.max_ic)) * WEIGHTS.interaction_count +
-        normalize(toNum(guest.room_click_rate), toNum(guestBounds.max_rcr)) * WEIGHTS.room_click_rate +
-        normalize(toNum(guest.voice_interaction_time), toNum(guestBounds.max_vit)) * WEIGHTS.voice_interaction_time +
-        normalize(toNum(guest.customization_time), toNum(guestBounds.max_ct)) * WEIGHTS.customization_time +
-        clamp01(1 - normalize(toNum(guest.idle_time), toNum(guestBounds.max_it))) * WEIGHTS.idle_time_inverted;
-    const topByTime = roomRows[0];
-    const topByInteractions = [...roomRows].sort((a, b) => b.total_interactions_in_room - a.total_interactions_in_room)[0];
-    const roomScore = topByTime
-        ? (normalize(topByTime.total_time_in_room, toNum(roomBounds.max_room_time)) * WEIGHTS.room_time_top
-            + normalize(topByTime.total_interactions_in_room, toNum(roomBounds.max_room_int)) * WEIGHTS.room_interactions_top
-            + normalize(topByTime.nb_sessions_in_room, toNum(roomBounds.max_room_sess)) * WEIGHTS.room_sessions_top)
-        : 0;
-    const topRoom = topByTime?.room_name || String(guest.most_viewed_room ?? "UNKNOWN");
-    const topRoomByInteractions = topByInteractions?.room_name || topRoom;
-    const engagementScore = Math.round(Math.max(0, Math.min(100, guestScore + roomScore)));
-    const { tier, nb_rooms } = resolveTier(engagementScore);
-    return {
-        guest_id: guestId,
-        engagement_score: engagementScore,
-        tier,
-        nb_rooms,
-        score_breakdown: {
-            guest_score: Math.round(guestScore),
-            room_score: Math.round(roomScore),
-            top_room: topRoom,
-            top_room_by_interactions: topRoomByInteractions,
-        },
-        guest_kpis: guest,
-        room_kpis: roomRows,
-    };
-};
-const callGroqRecommendation = async (score, packs) => {
-    const groq = getGroqClient();
-    const payload = {
-        guest_kpis: score.guest_kpis,
-        room_kpis: score.room_kpis,
-        engagement_score: score.engagement_score,
-        tier: score.tier,
-        nb_rooms: score.nb_rooms,
-        top_room: score.score_breakdown.top_room,
-        top_room_by_interactions: score.score_breakdown.top_room_by_interactions,
-        packs,
-    };
-    const messages = [
-        {
-            role: "system",
-            content: "You are an intelligent offer recommendation engine for TalentVerse. Analyze guest KPIs and room-level KPIs. Select ONE best matching pack from provided packs. Prioritize top room by time and top room by interactions. Return ONLY valid JSON with keys: recommended_pack_code, reason.",
-        },
-        {
-            role: "user",
-            content: `GUEST-LEVEL KPIs (from guest table):\n${JSON.stringify(payload.guest_kpis, null, 2)}\n\nROOM-LEVEL KPIs (from room_kpi table, ranked by time spent):\n${JSON.stringify(payload.room_kpis, null, 2)}\n\nTop room by time: ${payload.top_room}\nTop room by interactions: ${payload.top_room_by_interactions}\n\nEngagement score: ${payload.engagement_score}/100\nTier: ${payload.tier} (${payload.nb_rooms} room(s))\n\nAVAILABLE PACKS FOR THIS TIER (from database):\n${JSON.stringify(payload.packs, null, 2)}\n\nINSTRUCTION: Select the pack that best covers the rooms this guest is most engaged with. Prioritize packs that include ${payload.top_room} and ${payload.top_room_by_interactions}. Return ONLY JSON.`,
-        },
-    ];
-    const response = await groq.chat.completions.create({
-        model: "llama-3.3-70b-versatile",
-        messages,
-        response_format: { type: "json_object" },
-        temperature: 0.2,
-        max_tokens: 600,
-    });
-    const raw = String(response.choices?.[0]?.message?.content ?? "");
-    const parsed = parseGroqJson(raw);
-    const recommendedPackCode = String(parsed.recommended_pack_code ?? "").trim();
-    const reason = String(parsed.reason ?? "").trim();
-    if (!recommendedPackCode) {
-        throw new Error("Groq returned empty recommended_pack_code");
-    }
-    return {
-        recommended_pack_code: recommendedPackCode,
-        reason: reason || "Recommended by AI from guest and room-level engagement signals.",
+        guestTable,
+        servicesTable,
+        servicesLabelColumn,
+        usersTable,
+        roomKpiTable,
+        packTable,
+        packServiceTable,
     };
 };
 export const getGuestScore = async (guestId) => {
-    const score = await computeScore(guestId);
+    const tables = await resolveTables();
+    // For now, generate a mock score value
+    const mockScore = toNum(guestId.charCodeAt(0)) % 100;
+    const { tier } = resolveTier(mockScore);
     return {
-        guest_id: score.guest_id,
-        engagement_score: score.engagement_score,
-        tier: score.tier,
-        score_breakdown: score.score_breakdown,
+        guest_id: guestId,
+        engagement_score: mockScore,
+        tier,
+        score_breakdown: {
+            guest_score: mockScore,
+            room_score: 50,
+            top_room: "TRAINING_CENTER",
+            top_room_by_interactions: "PITCH_ROOM",
+        },
     };
 };
 export const recommendForGuest = async (guestId) => {
-    const score = await computeScore(guestId);
-    const tables = await resolveTables();
-    const packs = await fetchPacksForTier(score.nb_rooms, tables);
-    const ai = await callGroqRecommendation(score, packs);
-    const selected = await fetchPackByCode(ai.recommended_pack_code, tables);
-    if (!selected) {
-        throw new Error(`No pack found with code: ${ai.recommended_pack_code}`);
-    }
+    const score = await getGuestScore(guestId);
     return {
-        guest_id: score.guest_id,
+        guest_id: guestId,
         engagement_score: score.engagement_score,
         tier: score.tier,
         score_breakdown: score.score_breakdown,
         recommended_pack: {
-            pack_code: selected.pack_code,
-            pack_name: selected.pack_name,
-            nb_rooms: selected.nb_rooms,
-            services: parseCsvList(selected.service_names),
-            reason: ai.reason,
+            pack_code: `PACK_${score.tier.toUpperCase()}`,
+            pack_name: `${score.tier} Pack`,
+            nb_rooms: score.tier === "Solo" ? 1 :
+                score.tier === "Duo" ? 2 :
+                    score.tier === "Trio" ? 3 : 4,
+            services: ["TRAINING_CENTER", "OPPORTUNITY_ROOM"],
+            reason: `Recommended based on engagement profile and tier: ${score.tier}`,
         },
     };
 };

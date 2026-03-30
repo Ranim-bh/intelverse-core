@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { guests, MOCK_GUESTS } from "@/lib/mock-data";
+import { useAppData } from "@/lib/db-client";
 import { analyzeGuest } from "@/lib/scoring";
 import {
   ArrowLeft,
@@ -31,8 +31,9 @@ import {
   Pie,
 } from "recharts";
 import { motion } from "motion/react";
-import type { AIOffer, Guest } from "@/lib/types";
+import type { Guest } from "@/lib/types";
 import { getOfferStatusBadgeClasses, getOfferStatusLabel } from "@/lib/offer-status";
+import { NormalizedRecommendResponse, normalizeRecommendResponse } from "@/lib/recommendation-client";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -54,7 +55,7 @@ const StatCard = ({ icon: Icon, label, value, subValue, color }: {
 );
 
 // Derive extra data from our Guest type
-function deriveGuestData(guest: Guest, existingOffer?: AIOffer) {
+function deriveGuestData(guest: Guest) {
   const analysis = analyzeGuest(guest);
   const navigationBasedVisits = guest.navigation_path.reduce<Record<string, number>>((acc, step) => {
     if (step === "Showcase Room" || step === "Opportunity Room" || step === "Pitch Room" || step === "Training Center") {
@@ -77,12 +78,10 @@ function deriveGuestData(guest: Guest, existingOffer?: AIOffer) {
     ? navigationBasedVisits["Training Center"] || 0
     : guest.room_observation_time["Training Center"] || 0;
 
-  const activityHistory = [
-    { date: "Sem 1", interactions: Math.round(guest.interaction_count * 0.15) },
-    { date: "Sem 2", interactions: Math.round(guest.interaction_count * 0.25) },
-    { date: "Sem 3", interactions: Math.round(guest.interaction_count * 0.35) },
-    { date: "Sem 4", interactions: Math.round(guest.interaction_count * 0.25) },
-  ];
+  const activityHistory = Object.entries(guest.room_click_rate).map(([room, interactions]) => ({
+    date: room,
+    interactions,
+  }));
 
   const aiInsights: string[] = [];
   if (guest.voice_interaction_time > 2) aiInsights.push(`Forte utilisation vocale (${guest.voice_interaction_time} min) — profil orienté networking.`);
@@ -90,30 +89,6 @@ function deriveGuestData(guest: Guest, existingOffer?: AIOffer) {
   if (guest.idle_time > 1) aiInsights.push(`Temps d'inactivité de ${guest.idle_time} min détecté — risque de désengagement.`);
   if (analysis.score > 70) aiInsights.push("Score élevé — candidat prioritaire pour conversion rapide.");
   if (guest.customization_time > 1) aiInsights.push(`Temps de personnalisation de ${guest.customization_time} min — fort intérêt produit.`);
-
-  const generatedOffer = existingOffer
-    ? {
-      status: existingOffer.status,
-      title: existingOffer.title,
-      sessionsIncluded: existingOffer.sessionsIncluded,
-      roomsIncluded: existingOffer.roomsIncluded,
-      reason: existingOffer.reason,
-      confidenceScore: existingOffer.confidenceScore,
-      priorityLevel: analysis.level === "hot" ? "Critical" : analysis.level === "warm" ? "High" : "Normal",
-      recommendedAction: analysis.level === "hot" ? "Envoyer proposition commerciale" : "Planifier démo personnalisée",
-    }
-    : {
-      status: analysis.level === "hot" ? "READY" : analysis.level === "warm" ? "DRAFT" : "PENDING",
-      title: `Pack ${analysis.recommended_room}`,
-      sessionsIncluded: analysis.score > 70 ? 12 : analysis.score >= 40 ? 6 : 3,
-      roomsIncluded: analysis.score > 70
-        ? ["Training Center", "Showcase Room", analysis.recommended_room].filter((v, i, a) => a.indexOf(v) === i)
-        : [analysis.recommended_room],
-      reason: analysis.offer,
-      confidenceScore: Math.min(99, analysis.score + 10),
-      priorityLevel: analysis.level === "hot" ? "Critical" : analysis.level === "warm" ? "High" : "Normal",
-      recommendedAction: analysis.level === "hot" ? "Envoyer proposition commerciale" : "Planifier démo personnalisée",
-    };
 
   return {
     analysis,
@@ -123,7 +98,6 @@ function deriveGuestData(guest: Guest, existingOffer?: AIOffer) {
     trainingVisits,
     activityHistory,
     aiInsights,
-    generatedOffer,
     conversionProbability: Math.min(99, analysis.score + 5),
   };
 }
@@ -140,9 +114,52 @@ export default function GuestDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [adminNote, setAdminNote] = useState("");
+  const [recommendation, setRecommendation] = useState<NormalizedRecommendResponse | null>(null);
+  const [recommendationLoading, setRecommendationLoading] = useState(false);
+  const [recommendationError, setRecommendationError] = useState<string | null>(null);
+  const { data, loading, error } = useAppData();
 
+  const guests = data.guests;
   const guest = guests.find((g) => g.id === id);
-  const guestWithOffer = MOCK_GUESTS.find((g) => g.id === id);
+
+  const loadRecommendation = async (guestId: string) => {
+    setRecommendationLoading(true);
+    setRecommendationError(null);
+    try {
+      const res = await fetch(`/api/recommend/${encodeURIComponent(guestId)}`, { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const message = typeof body?.error === "string" ? body.error : `Recommendation API error ${res.status}`;
+        throw new Error(message);
+      }
+
+      const rawPayload = (body && typeof body === "object" && body.fallback)
+        ? body.fallback
+        : body;
+      const payload = normalizeRecommendResponse(rawPayload);
+      setRecommendation(payload);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load recommendation";
+      setRecommendationError(message);
+      setRecommendation(null);
+    } finally {
+      setRecommendationLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!id) return;
+    void loadRecommendation(id);
+  }, [id]);
+
+  if (loading) {
+    return <div className="text-sm text-muted-foreground">Chargement des donnees...</div>;
+  }
+
+  if (error) {
+    return <div className="text-sm text-destructive">Erreur donnees: {error}</div>;
+  }
+
   if (!guest) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
@@ -162,9 +179,8 @@ export default function GuestDetail() {
     trainingVisits,
     activityHistory,
     aiInsights,
-    generatedOffer,
     conversionProbability,
-  } = deriveGuestData(guest, guestWithOffer?.generatedOffer);
+  } = deriveGuestData(guest);
 
   const roomData = [
     { name: "Showcase", value: showcaseVisits },
@@ -397,47 +413,70 @@ export default function GuestDetail() {
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
             <div className="p-6 border-b border-slate-100 bg-slate-50/50">
               <div className="flex items-center justify-between mb-2">
-                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getOfferStatusBadgeClasses(generatedOffer.status)}`}>
-                  {getOfferStatusLabel(generatedOffer.status)}
+                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getOfferStatusBadgeClasses("pending")}`}>
+                  {getOfferStatusLabel("pending")}
+                </span>
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold border bg-slate-900 text-white border-slate-900">
+                  Powered by Groq
                 </span>
               </div>
-              <h3 className="text-xl font-bold text-slate-900">{generatedOffer.title}</h3>
+              <h3 className="text-xl font-bold text-slate-900">
+                {recommendation?.recommended_pack?.pack_name ?? "No generated pack yet"}
+              </h3>
               <p className="text-xs text-slate-500 mt-1">For: {guest.name} ({guest.type_client})</p>
             </div>
 
             <div className="p-6 flex-1 space-y-4">
               <div className="flex items-center justify-between">
                 <span className="text-sm text-slate-500">Sessions</span>
-                <span className="text-sm font-bold text-slate-900">{generatedOffer.sessionsIncluded}</span>
+                <span className="text-sm font-bold text-slate-900">
+                  {recommendation?.recommended_pack?.nb_rooms ?? "-"}
+                </span>
               </div>
 
               <div>
                 <p className="text-xs font-bold text-slate-400 uppercase mb-2">Included Rooms</p>
                 <div className="flex flex-wrap gap-2">
-                  {generatedOffer.roomsIncluded.map((room, idx) => (
+                  {(recommendation?.recommended_pack?.services ?? []).map((room, idx) => (
                     <span key={idx} className="px-2 py-1 bg-red-50 text-red-700 rounded text-[10px] font-medium">
                       {room}
                     </span>
                   ))}
+                  {!recommendation?.recommended_pack?.services?.length && (
+                    <span className="text-xs text-slate-500">No services available.</span>
+                  )}
                 </div>
               </div>
 
               <div className="p-3 bg-red-50 rounded-lg border border-red-100">
-                <p className="text-[10px] font-bold text-red-500 uppercase mb-1">AI Reason</p>
-                <p className="text-xs text-red-800 italic">"{generatedOffer.reason}"</p>
+                <p className="text-[10px] font-bold text-red-500 uppercase mb-1">Reason of Choice</p>
+                <p className="text-xs text-red-800 italic">
+                  "{recommendation?.recommended_pack?.reason ?? "Recommendation not available yet."}"
+                </p>
               </div>
+              {recommendationError && (
+                <p className="text-xs text-destructive">Recommendation error: {recommendationError}</p>
+              )}
             </div>
 
             <div className="p-6 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
               <div>
                 <p className="text-[10px] font-bold text-slate-400 uppercase">Confidence</p>
-                <p className="text-lg font-black text-slate-900">{generatedOffer.confidenceScore}%</p>
+                <p className="text-lg font-black text-slate-900">{recommendation?.score ?? "-"}%</p>
               </div>
               <div className="flex items-center gap-2">
-                {canRegenerate(String(generatedOffer.status)) && (
-                  <button className="flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 text-indigo-600 border border-indigo-200 rounded-lg text-[10px] font-bold hover:bg-indigo-100 transition-colors">
+                {canRegenerate("pending") && (
+                  <button
+                    onClick={() => {
+                      if (id) {
+                        void loadRecommendation(id);
+                      }
+                    }}
+                    disabled={recommendationLoading}
+                    className="flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 text-indigo-600 border border-indigo-200 rounded-lg text-[10px] font-bold hover:bg-indigo-100 transition-colors disabled:opacity-60"
+                  >
                     <RefreshCw size={12} />
-                    Regenerate
+                    {recommendationLoading ? "Loading..." : "Regenerate"}
                   </button>
                 )}
                 <button className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50 transition-colors">

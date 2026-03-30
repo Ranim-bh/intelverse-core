@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { partners } from "@/lib/mock-data";
+import { useAppData } from "@/lib/db-client";
 import { getUpsellRecommendation, getRoomColor, ROOM_HEX_COLORS } from "@/lib/scoring";
 import { Partner, RoomName } from "@/lib/types";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
@@ -8,7 +8,17 @@ import { Award, TrendingUp, Sparkles, X, Send, Star } from "lucide-react";
 const allRooms: RoomName[] = ['Training Center', 'Showcase Room', 'Opportunity Room', 'Pitch Room'];
 
 export default function Partners() {
+  const { data, loading, error } = useAppData();
+  const partners = data.partners;
   const [upsellModal, setUpsellModal] = useState<{ partner: Partner; room: RoomName; reason: string } | null>(null);
+
+  if (loading) {
+    return <div className="text-sm text-muted-foreground">Chargement des donnees...</div>;
+  }
+
+  if (error) {
+    return <div className="text-sm text-destructive">Erreur donnees: {error}</div>;
+  }
 
   return (
     <div className="space-y-6 animate-fade-in">

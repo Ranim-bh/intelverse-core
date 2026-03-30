@@ -1,12 +1,9 @@
-import React from 'react';
-import { AIOffer } from '../lib/types';
+import React, { useState } from 'react';
+import { Guest } from '../lib/types';
 import { RefreshCw } from 'lucide-react';
-import { MOCK_GUESTS } from '../lib/mock-data';
+import { useAppData } from '../lib/db-client';
 import { getOfferStatusBadgeClasses, getOfferStatusLabel } from '../lib/offer-status';
-
-interface PackageManagementProps {
-  packages?: AIOffer[];
-}
+import { NormalizedRecommendResponse, normalizeRecommendResponse } from '../lib/recommendation-client';
 
 const canRegenerate = (status: string) =>
   status === 'pending' ||
@@ -19,7 +16,54 @@ const canRegenerate = (status: string) =>
   status === 'Offre Supprimée' ||
   status === 'Offre Refusée';
 
-export const PackageManagement = ({ packages }: PackageManagementProps) => {
+export const PackageManagement = () => {
+  const { data, loading, error } = useAppData();
+  const guests = data.guests;
+  const [recommendations, setRecommendations] = useState<Record<string, NormalizedRecommendResponse>>({});
+  const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const loadRecommendation = async (guest: Guest) => {
+    setLoadingIds((prev) => new Set(prev).add(guest.id));
+    setErrors((prev) => {
+      const next = { ...prev };
+      delete next[guest.id];
+      return next;
+    });
+
+    try {
+      const res = await fetch(`/api/recommend/${encodeURIComponent(guest.id)}`, { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const message = typeof body?.error === 'string' ? body.error : `Recommendation API error ${res.status}`;
+        throw new Error(message);
+      }
+
+      const rawPayload = (body && typeof body === 'object' && body.fallback)
+        ? body.fallback
+        : body;
+      const payload = normalizeRecommendResponse(rawPayload);
+      setRecommendations((prev) => ({ ...prev, [guest.id]: payload }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load recommendation';
+      setErrors((prev) => ({ ...prev, [guest.id]: message }));
+    } finally {
+      setLoadingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(guest.id);
+        return next;
+      });
+    }
+  };
+
+  if (loading) {
+    return <div className="text-sm text-muted-foreground">Chargement des donnees...</div>;
+  }
+
+  if (error) {
+    return <div className="text-sm text-destructive">Erreur donnees: {error}</div>;
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -29,50 +73,68 @@ export const PackageManagement = ({ packages }: PackageManagementProps) => {
         </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {MOCK_GUESTS.map((guest) => (
+        {guests.map((guest) => {
+          const recommendation = recommendations[guest.id];
+          const isLoading = loadingIds.has(guest.id);
+          const errorMessage = errors[guest.id];
+
+          return (
           <div key={guest.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
             <div className="p-6 border-b border-slate-100 bg-slate-50/50">
               <div className="flex items-center justify-between mb-2">
-                <span className={`px-2 py-0.5 rounded text-[10px] leading-[13px] font-bold border ${getOfferStatusBadgeClasses(guest.generatedOffer.status)}`}>
-                  {getOfferStatusLabel(guest.generatedOffer.status)}
+                <span className={`px-2 py-0.5 rounded text-[10px] leading-[13px] font-bold border ${getOfferStatusBadgeClasses('pending')}`}>
+                  {getOfferStatusLabel('pending')}
+                </span>
+                <span className="px-2 py-0.5 rounded text-[10px] leading-[13px] font-bold border bg-slate-900 text-white border-slate-900">
+                  Powered by Groq
                 </span>
               </div>
-              <h3 className="text-xl font-bold text-slate-900">{guest.generatedOffer.title}</h3>
-              <p className="text-xs text-slate-500 mt-1">For: {guest.fullName} ({guest.company})</p>
+              <h3 className="text-xl font-bold text-slate-900">{recommendation?.recommended_pack?.pack_name ?? 'No generated pack yet'}</h3>
+              <p className="text-xs text-slate-500 mt-1">For: {guest.name} ({guest.type_client})</p>
             </div>
 
             <div className="p-6 flex-1 space-y-4">
               <div className="flex items-center justify-between">
                 <span className="text-sm text-slate-500">Sessions</span>
-                <span className="text-sm font-bold text-slate-900">{guest.generatedOffer.sessionsIncluded}</span>
+                <span className="text-sm font-bold text-slate-900">{recommendation?.recommended_pack?.nb_rooms ?? '-'}</span>
               </div>
 
               <div>
                 <p className="text-xs font-bold text-slate-400 uppercase mb-2">Included Rooms</p>
                 <div className="flex flex-wrap gap-2">
-                  {guest.generatedOffer.roomsIncluded.map((room, idx) => (
+                  {(recommendation?.recommended_pack?.services ?? []).map((room, idx) => (
                     <span key={idx} className="px-2 py-1 bg-red-50 text-red-700 rounded text-[10px] font-medium">
                       {room}
                     </span>
                   ))}
+                  {!recommendation?.recommended_pack?.services?.length && (
+                    <span className="text-xs text-slate-500">No services available.</span>
+                  )}
                 </div>
               </div>
               <div className="p-3 bg-red-50 rounded-lg border border-red-100">
-                <p className="text-[10px] font-bold text-red-500 uppercase mb-1">AI Reason</p>
-                <p className="text-xs text-red-800 italic">"{guest.generatedOffer.reason}"</p>
+                <p className="text-[10px] font-bold text-red-500 uppercase mb-1">Reason of Choice</p>
+                <p className="text-xs text-red-800 italic">"{recommendation?.recommended_pack?.reason ?? 'Recommendation not available yet.'}"</p>
               </div>
+              {errorMessage && <p className="text-xs text-destructive">Recommendation error: {errorMessage}</p>}
             </div>
 
             <div className="p-6 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
               <div>
                 <p className="text-[10px] font-bold text-slate-400 uppercase">Confidence</p>
-                <p className="text-lg font-black text-slate-900">{guest.generatedOffer.confidenceScore}%</p>
+                <p className="text-lg font-black text-slate-900">{recommendation?.score ?? '-'}%</p>
               </div>
               <div className="flex items-center gap-2">
-                {canRegenerate(String(guest.generatedOffer.status)) && (
-                  <button className="flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 text-indigo-600 border border-indigo-200 rounded-lg text-[10px] font-bold hover:bg-indigo-100 transition-colors">
+                {canRegenerate('pending') && (
+                  <button
+                    onClick={() => {
+                      void loadRecommendation(guest);
+                    }}
+                    disabled={isLoading}
+                    className="flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 text-indigo-600 border border-indigo-200 rounded-lg text-[10px] font-bold hover:bg-indigo-100 transition-colors disabled:opacity-60"
+                  >
                     <RefreshCw size={12} />
-                    Regenerate
+                    {isLoading ? 'Loading...' : 'Regenerate'}
                   </button>
                 )}
                 <button className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50 transition-colors">
@@ -81,7 +143,8 @@ export const PackageManagement = ({ packages }: PackageManagementProps) => {
               </div>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

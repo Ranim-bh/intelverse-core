@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { churnProfiles } from "@/lib/mock-data";
+import { useEffect, useState } from "react";
+import { useAppData } from "@/lib/db-client";
 import { getRiskColor, getRiskBadgeColor, signalDescriptions } from "@/lib/scoring";
 import { RiskLevel, ChurnProfile } from "@/lib/types";
 import { ShieldAlert, MessageSquare, Bell, Archive, Settings2, TrendingUp } from "lucide-react";
@@ -13,8 +13,23 @@ const riskColumns: { level: RiskLevel; label: string; icon: typeof ShieldAlert }
 ];
 
 export default function AntiChurn() {
-  const [profiles, setProfiles] = useState(churnProfiles);
+  const { data, loading, error } = useAppData();
+  const [profiles, setProfiles] = useState<ChurnProfile[]>([]);
   const [showConfig, setShowConfig] = useState(false);
+
+  const churnProfiles = data.churnProfiles;
+
+  useEffect(() => {
+    setProfiles(churnProfiles);
+  }, [churnProfiles]);
+
+  if (loading) {
+    return <div className="text-sm text-muted-foreground">Chargement des donnees...</div>;
+  }
+
+  if (error) {
+    return <div className="text-sm text-destructive">Erreur donnees: {error}</div>;
+  }
 
   const recovered = profiles.filter(p => p.recovered).length;
   const total = profiles.length;

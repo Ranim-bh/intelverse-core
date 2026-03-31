@@ -3,7 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import Groq from "groq-sdk";
 import { loadDataset as loadTable, loadDatasets as loadTables, } from "./services/datasetLoader.js";
-import { getGuestScore, recommendForGuest } from "./services/recommendationEngine.js";
+import { getGuestScore, recommendForGuest, saveRecommendationForGuest, listRecommendedOffers, updateRecommendedOfferStatus, } from "./services/recommendationEngine.js";
 dotenv.config();
 const app = express();
 const PORT = Number(process.env.PORT) || 5000;
@@ -269,6 +269,63 @@ app.post("/api/recommend/:guest_id", async (req, res) => {
         const typed = error;
         const status = typeof typed.status === "number" ? typed.status : 500;
         const message = error instanceof Error ? error.message : "Recommendation failed";
+        return res.status(status).json({ error: message });
+    }
+});
+app.post("/api/recommend/:guest_id/save", async (req, res) => {
+    try {
+        const guestId = String(req.params.guest_id ?? "").trim();
+        if (!guestId) {
+            return res.status(400).json({ error: "Missing guest_id" });
+        }
+        const payload = req.body;
+        if (!payload || typeof payload !== "object") {
+            return res.status(400).json({ error: "Missing recommendation payload" });
+        }
+        const recommendation = payload;
+        const saved = await saveRecommendationForGuest(guestId, recommendation);
+        return res.json({
+            message: "Recommendation saved",
+            ...saved,
+        });
+    }
+    catch (error) {
+        const typed = error;
+        const status = typeof typed.status === "number" ? typed.status : 500;
+        const message = error instanceof Error ? error.message : "Failed to save recommendation";
+        return res.status(status).json({ error: message });
+    }
+});
+app.get("/api/recommend/offers", async (_req, res) => {
+    try {
+        const offers = await listRecommendedOffers();
+        return res.json(offers);
+    }
+    catch (error) {
+        const typed = error;
+        const status = typeof typed.status === "number" ? typed.status : 500;
+        const message = error instanceof Error ? error.message : "Failed to list offers";
+        return res.status(status).json({ error: message });
+    }
+});
+app.patch("/api/recommend/:guest_id/status", async (req, res) => {
+    try {
+        const guestId = String(req.params.guest_id ?? "").trim();
+        if (!guestId) {
+            return res.status(400).json({ error: "Missing guest_id" });
+        }
+        const statusInput = String(req.body?.status ?? "").trim().toLowerCase();
+        const allowed = ["pending", "accepted", "rejected", "sent"];
+        if (!allowed.includes(statusInput)) {
+            return res.status(400).json({ error: "Invalid status. Use pending | accepted | rejected | sent" });
+        }
+        const updated = await updateRecommendedOfferStatus(guestId, statusInput);
+        return res.json({ message: "Offer status updated", ...updated });
+    }
+    catch (error) {
+        const typed = error;
+        const status = typeof typed.status === "number" ? typed.status : 500;
+        const message = error instanceof Error ? error.message : "Failed to update offer status";
         return res.status(status).json({ error: message });
     }
 });

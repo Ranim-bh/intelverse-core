@@ -1,32 +1,37 @@
-import { useMemo } from "react";
 import { DollarSign, Target, TrendingUp, AlertTriangle, BarChart3 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { KpiCard } from "@/components/dashboard/KpiCard";
 import { useAppData } from "@/lib/db-client";
-import { analyzeGuest, getRiskBadgeColor } from "@/lib/scoring";
+import { getRiskBadgeColor } from "@/lib/scoring";
 
 export default function Dashboard() {
   const { data } = useAppData();
   const guests = data.guests;
   const partners = data.partners;
+  const churnProfiles = data.churnProfiles;
+  const businessMetrics = data.businessMetrics;
 
-  const mockBusinessMetrics = [
-    { mrr: 50000, cac: 500, ltv: 5000, churn_rate: 3, conversion_rate: 12 },
-    { mrr: 52000, cac: 480, ltv: 5200, churn_rate: 2.8, conversion_rate: 13 },
-  ];
-
-  const latestMetric = mockBusinessMetrics[mockBusinessMetrics.length - 1];
-  const prevMetric = mockBusinessMetrics[mockBusinessMetrics.length - 2];
+  const latestMetric = businessMetrics[businessMetrics.length - 1] ?? {
+    month: "N/A",
+    mrr: 0,
+    cac: 0,
+    ltv: 0,
+    churn_rate: 0,
+    conversion_rate: 0,
+  };
+  const prevMetric = businessMetrics[businessMetrics.length - 2] ?? latestMetric;
 
   const mrrTrend = Math.round(((latestMetric.mrr - prevMetric.mrr) / prevMetric.mrr) * 100);
   const cacTrend = Math.round(((latestMetric.cac - prevMetric.cac) / prevMetric.cac) * 100);
   const ltvTrend = Math.round(((latestMetric.ltv - prevMetric.ltv) / prevMetric.ltv) * 100);
 
   const totalGuests = guests.length;
-  const convertedGuests = guests.filter(g => g.status === 'Converti').length;
+  const convertedGuests = guests.filter((g) => g.status === "Converti").length;
   const totalPartners = partners.length;
-  const fiablePartners = partners.filter(p => (p as unknown as Record<string, unknown>).level === 'Partenaire Fiable').length;
-  const atRiskProfiles: unknown[] = [];
+  const fiablePartners = partners.filter((p) => p.level === "Partenaire Fiable").length;
+  const atRiskProfiles = churnProfiles.filter((c) => !c.recovered && (c.risk_level === "high" || c.risk_level === "critical"));
+  const safeGuest = guests[0];
+  const safePartner = partners[0];
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -71,8 +76,8 @@ export default function Dashboard() {
           <div className="space-y-4">
             {[
               { label: 'Guests', count: totalGuests, pct: 100, color: 'bg-primary' },
-              { label: 'Partenaires', count: totalPartners, pct: Math.round((totalPartners / totalGuests) * 100), color: 'bg-success' },
-              { label: 'Partenaires Fiables', count: fiablePartners, pct: Math.round((fiablePartners / totalGuests) * 100), color: 'bg-room-showcase' },
+              { label: 'Partenaires', count: totalPartners, pct: totalGuests > 0 ? Math.round((totalPartners / totalGuests) * 100) : 0, color: 'bg-success' },
+              { label: 'Partenaires Fiables', count: fiablePartners, pct: totalGuests > 0 ? Math.round((fiablePartners / totalGuests) * 100) : 0, color: 'bg-room-showcase' },
             ].map((step, i) => (
               <div key={step.label} className="animate-slide-up" style={{ animationDelay: `${i * 150}ms` }}>
                 <div className="flex justify-between mb-1.5">
@@ -95,20 +100,26 @@ export default function Dashboard() {
         {/* MRR Chart */}
         <div className="glass-card p-6">
           <h3 className="text-sm font-semibold text-foreground mb-4">MRR — Évolution 6 mois</h3>
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={businessMetrics}>
-              <CartesianGrid strokeDasharray="3 3" stroke="hsl(195 22% 84%)" />
-              <XAxis dataKey="month" tick={{ fontSize: 11, fill: 'hsl(195 22% 38%)' }} axisLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: 'hsl(195 22% 38%)' }} axisLine={false} tickFormatter={v => `€${v / 1000}k`} />
-              <Tooltip
-                contentStyle={{ backgroundColor: 'hsl(0 0% 100%)', border: '1px solid hsl(195 22% 84%)', borderRadius: '8px', fontSize: '12px' }}
-                labelStyle={{ color: 'hsl(195 60% 11%)' }}
-                itemStyle={{ color: '#06B6D4' }}
-                formatter={(value: number) => [`€${value.toLocaleString()}`, 'MRR']}
-              />
-              <Line type="monotone" dataKey="mrr" stroke="#06B6D4" strokeWidth={2.5} dot={{ fill: '#06B6D4', r: 4 }} activeDot={{ r: 6 }} />
-            </LineChart>
-          </ResponsiveContainer>
+          {businessMetrics.length === 0 ? (
+            <div className="h-[200px] flex items-center justify-center text-sm text-muted-foreground">
+              No business metrics in database.
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={businessMetrics}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(195 22% 84%)" />
+                <XAxis dataKey="month" tick={{ fontSize: 11, fill: 'hsl(195 22% 38%)' }} axisLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: 'hsl(195 22% 38%)' }} axisLine={false} tickFormatter={v => `€${v / 1000}k`} />
+                <Tooltip
+                  contentStyle={{ backgroundColor: 'hsl(0 0% 100%)', border: '1px solid hsl(195 22% 84%)', borderRadius: '8px', fontSize: '12px' }}
+                  labelStyle={{ color: 'hsl(195 60% 11%)' }}
+                  itemStyle={{ color: '#06B6D4' }}
+                  formatter={(value: number) => [`€${value.toLocaleString()}`, 'MRR']}
+                />
+                <Line type="monotone" dataKey="mrr" stroke="#06B6D4" strokeWidth={2.5} dot={{ fill: '#06B6D4', r: 4 }} activeDot={{ r: 6 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
         </div>
       </div>
 
@@ -117,10 +128,18 @@ export default function Dashboard() {
         <h3 className="text-sm font-semibold text-foreground mb-4">Activité Récente</h3>
         <div className="space-y-3">
           {[
-            { text: `${guests[0].name} — Score IA: ${analyzeGuest(guests[0]).score}/100 → ${analyzeGuest(guests[0]).recommended_room}`, time: 'Il y a 2h', type: 'offer' },
-            { text: `Signal churn détecté: ${churnProfiles[3].name} (${churnProfiles[3].signals.join(', ')})`, time: 'Il y a 4h', type: 'churn' },
-            { text: `${partners[2].name} — engagement score: ${partners[2].engagement_score}%`, time: 'Il y a 6h', type: 'partner' },
-            { text: `Nouveau guest: ${guests[4].name} — session ${guests[4].session_duration}min`, time: 'Il y a 8h', type: 'guest' },
+            safeGuest
+              ? { text: `${safeGuest.name} — session ${safeGuest.session_duration}min, interactions ${safeGuest.interaction_count}`, time: 'Il y a 2h', type: 'offer' }
+              : { text: 'Aucune activite guest disponible', time: 'Il y a 2h', type: 'offer' },
+            atRiskProfiles[0]
+              ? { text: `Signal churn detecte: ${atRiskProfiles[0].name} (${atRiskProfiles[0].signals.join(', ')})`, time: 'Il y a 4h', type: 'churn' }
+              : { text: 'Aucun signal churn critique detecte', time: 'Il y a 4h', type: 'churn' },
+            safePartner
+              ? { text: `${safePartner.name} — engagement score: ${safePartner.engagement_score}%`, time: 'Il y a 6h', type: 'partner' }
+              : { text: 'Aucune donnee partenaire disponible', time: 'Il y a 6h', type: 'partner' },
+            guests[1]
+              ? { text: `Nouveau guest: ${guests[1].name} — session ${guests[1].session_duration}min`, time: 'Il y a 8h', type: 'guest' }
+              : { text: 'En attente de nouvelles activites', time: 'Il y a 8h', type: 'guest' },
           ].map((activity, i) => (
             <div key={i} className="flex items-center gap-3 text-sm py-2 border-b border-border last:border-0">
               <div className={`w-2 h-2 rounded-full shrink-0 ${

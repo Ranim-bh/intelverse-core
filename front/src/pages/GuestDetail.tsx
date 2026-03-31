@@ -16,6 +16,8 @@ import {
   ChevronRight,
   Zap,
   RefreshCw,
+  FileDown,
+  CheckCircle2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -57,7 +59,14 @@ type RecommendationResponse = {
   guest_id: string;
   engagement_score: number;
   tier: string;
+  score_breakdown?: {
+    guest_score: number;
+    room_score: number;
+    top_room: string;
+    top_room_by_interactions: string;
+  };
   recommended_pack: {
+    pack_id?: string;
     pack_code: string;
     pack_name: string;
     nb_rooms: number;
@@ -129,6 +138,9 @@ export default function GuestDetail() {
   const [recommendation, setRecommendation] = useState<RecommendationResponse | null>(null);
   const [recommendationLoading, setRecommendationLoading] = useState(false);
   const [recommendationError, setRecommendationError] = useState<string | null>(null);
+  const [savingPack, setSavingPack] = useState(false);
+  const [savedPack, setSavedPack] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const { data, loading, error } = useAppData();
 
   const guests = data.guests;
@@ -155,6 +167,31 @@ export default function GuestDetail() {
       setRecommendation(null);
     } finally {
       setRecommendationLoading(false);
+    }
+  };
+
+  const saveCurrentPack = async () => {
+    if (!id || !recommendation) return;
+    setSavingPack(true);
+    setSaveError(null);
+
+    try {
+      const res = await fetch(`/api/recommend/${encodeURIComponent(id)}/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(recommendation),
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error || `Save API error ${res.status}`);
+      }
+
+      setSavedPack(true);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Failed to save pack");
+    } finally {
+      setSavingPack(false);
     }
   };
 
@@ -420,80 +457,118 @@ export default function GuestDetail() {
             </div>
           </div>
 
-          {/* AI Generated Offer — PackageManagement style */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-            <div className="p-6 border-b border-slate-100 bg-slate-50/50">
-              <div className="flex items-center justify-between mb-2">
-                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getOfferStatusBadgeClasses("pending")}`}>
-                  {getOfferStatusLabel("pending")}
+          {/* AI Generated Offer */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden max-w-3xl mx-auto">
+            <div className="p-6 border-b border-slate-200">
+              <div className="flex items-center justify-between mb-3">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                  <span className="w-2 h-2 rounded-full bg-amber-500" /> Offre Generee
                 </span>
-                <span className="px-2 py-0.5 rounded text-[10px] font-bold border bg-slate-900 text-white border-slate-900">
+                <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-slate-900 text-white border border-slate-900">
                   Powered by Groq
                 </span>
               </div>
-              <h3 className="text-xl font-bold text-slate-900">
+              <h3 className="text-4xl font-bold text-slate-900">
                 {recommendation?.recommended_pack?.pack_name ?? "No generated pack yet"}
               </h3>
-              <p className="text-xs text-slate-500 mt-1">For: {guest.name} ({guest.type_client})</p>
+              <p className="text-sm text-slate-600 mt-1">
+                Tier {recommendation?.tier ?? "-"} · Pack code {recommendation?.recommended_pack?.pack_code ?? "-"}
+              </p>
+              <p className="text-xs text-slate-500 mt-2">User: {guest.name} · Domain: {guest.domain}</p>
             </div>
 
-            <div className="p-6 flex-1 space-y-4">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-slate-500">Sessions</span>
-                <span className="text-sm font-bold text-slate-900">
-                  {recommendation?.recommended_pack?.nb_rooms ?? "-"}
-                </span>
+            <div className="p-6 space-y-6">
+              <div className="border-b border-slate-200 pb-4">
+                <h4 className="text-xs uppercase font-bold text-slate-500 tracking-wide mb-2">Sessions</h4>
+                <p className="text-4xl font-bold text-slate-900">{recommendation?.recommended_pack?.nb_rooms ?? "-"}</p>
               </div>
 
               <div>
-                <p className="text-xs font-bold text-slate-400 uppercase mb-2">Included Rooms</p>
-                <div className="flex flex-wrap gap-2">
-                  {(recommendation?.recommended_pack?.services ?? []).map((room, idx) => (
-                    <span key={idx} className="px-2 py-1 bg-red-50 text-red-700 rounded text-[10px] font-medium">
-                      {room}
-                    </span>
+                <h4 className="text-xs uppercase font-bold text-slate-500 tracking-wide mb-3">Services</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {(recommendation?.recommended_pack?.services ?? []).map((service) => (
+                    <div key={service} className="rounded-xl border border-slate-200 p-4 bg-slate-50">
+                      <p className="font-bold text-slate-900 flex items-center gap-2">✅ {service}</p>
+                      <p className="text-sm text-slate-700 mt-1">Price: $0</p>
+                      <p className="text-xs text-slate-600 mt-2">"{recommendation?.recommended_pack?.reason ?? ""}"</p>
+                    </div>
                   ))}
                   {!recommendation?.recommended_pack?.services?.length && (
-                    <span className="text-xs text-slate-500">No services available.</span>
+                    <div className="rounded-xl border border-slate-200 p-4 bg-slate-50 text-sm text-slate-500">
+                      No services available.
+                    </div>
                   )}
                 </div>
               </div>
 
-              <div className="p-3 bg-red-50 rounded-lg border border-red-100">
-                <p className="text-[10px] font-bold text-red-500 uppercase mb-1">Reason of Choice</p>
-                <p className="text-xs text-red-800 italic">
+              <div>
+                <h4 className="text-xs uppercase font-bold text-slate-500 tracking-wide mb-3">KPIs Improved</h4>
+                <div className="flex flex-wrap gap-2">
+                  {(recommendation?.score_breakdown?.top_room ? [recommendation.score_breakdown.top_room, recommendation.score_breakdown.top_room_by_interactions] : [])
+                    .filter((kpi, idx, arr) => arr.indexOf(kpi) === idx)
+                    .map((kpi, idx) => (
+                    <span key={`${kpi}-${idx}`} className="px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                      {kpi}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+                <p className="text-xs uppercase font-bold text-red-500 tracking-wide mb-1">Reason of Choice</p>
+                <p className="text-sm text-red-900 italic">
                   "{recommendation?.recommended_pack?.reason ?? "Recommendation not available yet."}"
                 </p>
               </div>
-              {recommendationError && (
-                <p className="text-xs text-destructive">Recommendation error: {recommendationError}</p>
-              )}
-            </div>
 
-            <div className="p-6 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
-              <div>
-                <p className="text-[10px] font-bold text-slate-400 uppercase">Confidence</p>
-                <p className="text-lg font-black text-slate-900">{recommendation?.engagement_score ?? "-"}%</p>
+              <div className="border-y border-slate-200 py-4 flex items-center justify-between">
+                <p className="text-sm uppercase tracking-wider font-bold text-slate-500">Total Price</p>
+                <p className="text-2xl font-black text-slate-900">$0</p>
               </div>
-              <div className="flex items-center gap-2">
+
+              <div className="rounded-xl border border-slate-200 bg-white p-4">
+                <p className="text-xs uppercase font-bold text-slate-500 tracking-wide mb-1">Summary</p>
+                <p className="text-sm text-slate-700">
+                  {recommendation?.recommended_pack?.reason ?? "Recommendation not available yet."}
+                </p>
+              </div>
+
+              {recommendationError ? <p className="text-xs text-destructive">Recommendation error: {recommendationError}</p> : null}
+              {saveError ? <p className="text-xs text-destructive">Save error: {saveError}</p> : null}
+
+              <div className="flex flex-wrap gap-2 justify-end">
                 {canRegenerate("pending") && (
                   <button
                     onClick={() => {
                       if (id) {
+                        setSavedPack(false);
                         void loadRecommendation(id);
                       }
                     }}
                     disabled={recommendationLoading}
-                    className="flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 text-indigo-600 border border-indigo-200 rounded-lg text-[10px] font-bold hover:bg-indigo-100 transition-colors disabled:opacity-60"
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60"
                   >
-                    <RefreshCw size={12} />
+                    <RefreshCw className="h-4 w-4" />
                     {recommendationLoading ? "Loading..." : "Regenerate"}
                   </button>
                 )}
-                <button className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50 transition-colors">
-                  Review Offer
+                <button
+                  onClick={() => window.print()}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50"
+                >
+                  <FileDown className="h-4 w-4" /> Download PDF
+                </button>
+                <button
+                  onClick={() => void saveCurrentPack()}
+                  disabled={savedPack || savingPack || !recommendation}
+                  className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold ${
+                    savedPack ? "bg-emerald-100 text-emerald-700" : "bg-emerald-600 text-white hover:bg-emerald-700"
+                  } disabled:opacity-70`}
+                >
+                  <CheckCircle2 className="h-4 w-4" /> {savedPack ? "Saved" : savingPack ? "Saving..." : "Save Pack"}
                 </button>
               </div>
+              {savedPack ? <p className="text-sm text-emerald-700 font-medium text-right">Pack successfully saved</p> : null}
             </div>
           </div>
         </div>

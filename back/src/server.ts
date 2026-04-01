@@ -396,13 +396,35 @@ app.patch("/api/recommend/:guest_id/status", async (req, res) => {
       return res.status(400).json({ error: "Missing guest_id" });
     }
 
-    const statusInput = String((req.body as { status?: string })?.status ?? "").trim().toLowerCase();
-    const allowed: OfferStatus[] = ["pending", "accepted", "rejected", "sent"];
-    if (!allowed.includes(statusInput as OfferStatus)) {
-      return res.status(400).json({ error: "Invalid status. Use pending | accepted | rejected | sent" });
+    const rawStatus = String((req.body as { status?: string })?.status ?? "").trim();
+    const normalizedStatus = rawStatus
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z_]/g, "");
+
+    const statusMap: Record<string, OfferStatus> = {
+      en_attente: "en_attente",
+      pending: "en_attente",
+      generee: "generée",
+      generated: "generée",
+      envoyee: "envoyée",
+      envoyae: "envoyée",
+      sent: "envoyée",
+      acceptee: "acceptée",
+      acceptae: "acceptée",
+      accepted: "acceptée",
+      refusee: "refusée",
+      refusae: "refusée",
+      rejected: "refusée",
+    };
+
+    const statusInput = statusMap[normalizedStatus];
+    if (!statusInput) {
+      return res.status(400).json({ error: "Invalid status. Use en_attente | generée | envoyée | acceptée | refusée" });
     }
 
-    const updated = await updateRecommendedOfferStatus(guestId, statusInput as OfferStatus);
+    const updated = await updateRecommendedOfferStatus(guestId, statusInput);
     return res.json({ message: "Offer status updated", ...updated });
   } catch (error) {
     const typed = error as Error & { status?: number };

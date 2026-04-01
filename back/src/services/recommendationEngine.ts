@@ -44,7 +44,7 @@ export interface RecommendationResult {
   };
 }
 
-export type OfferStatus = "pending" | "accepted" | "rejected" | "sent";
+export type OfferStatus = "en_attente" | "generée" | "envoyée" | "acceptée" | "refusée";
 
 const getGroqClient = (): Groq => {
   const apiKey = (process.env.GROQ_API_KEY ?? "").trim();
@@ -490,22 +490,93 @@ const ensureRecommendedOffersTable = async (): Promise<void> => {
       tier TEXT,
       score NUMERIC,
       offer_payload JSONB NOT NULL,
-      status TEXT CHECK (status IN ('pending', 'accepted', 'rejected', 'sent')) DEFAULT 'pending',
+      status TEXT CHECK (status IN ('en_attente', 'generée', 'envoyée', 'acceptée', 'refusée')) DEFAULT 'en_attente',
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW()
     )
   `);
 
-  // Align existing environments where the older CHECK constraint does not include 'sent'.
+  // Bring legacy table schemas up to date (some environments have an older table shape).
+  await queryDb(`
+    ALTER TABLE recommended_offers
+    ADD COLUMN IF NOT EXISTS pack_id UUID NULL
+  `);
+
+  await queryDb(`
+    ALTER TABLE recommended_offers
+    ADD COLUMN IF NOT EXISTS tier TEXT
+  `);
+
+  await queryDb(`
+    ALTER TABLE recommended_offers
+    ADD COLUMN IF NOT EXISTS score NUMERIC
+  `);
+
+  await queryDb(`
+    ALTER TABLE recommended_offers
+    ADD COLUMN IF NOT EXISTS offer_payload JSONB
+  `);
+
+  await queryDb(`
+    ALTER TABLE recommended_offers
+    ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'en_attente'
+  `);
+
+  await queryDb(`
+    ALTER TABLE recommended_offers
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()
+  `);
+
+  await queryDb(`
+    ALTER TABLE recommended_offers
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()
+  `);
+
+  // Ensure required columns are populated for old rows before applying NOT NULL assumptions.
+  await queryDb(`
+    UPDATE recommended_offers
+    SET offer_payload = '{}'::jsonb
+    WHERE offer_payload IS NULL
+  `);
+
+  await queryDb(`
+    ALTER TABLE recommended_offers
+    ALTER COLUMN offer_payload SET NOT NULL
+  `);
+
+  // Align existing environments with the current French status constraint.
   await queryDb(`
     ALTER TABLE recommended_offers
     DROP CONSTRAINT IF EXISTS recommended_offers_status_check
   `);
 
+  // Normalize legacy EN or unaccented values before re-applying the FR-only constraint.
+  await queryDb(`
+    UPDATE recommended_offers
+    SET status = CASE LOWER(status)
+      WHEN 'pending' THEN 'en_attente'
+      WHEN 'en_attente' THEN 'en_attente'
+      WHEN 'generated' THEN 'generée'
+      WHEN 'generee' THEN 'generée'
+      WHEN 'generée' THEN 'generée'
+      WHEN 'générée' THEN 'generée'
+      WHEN 'sent' THEN 'envoyée'
+      WHEN 'envoyee' THEN 'envoyée'
+      WHEN 'envoyée' THEN 'envoyée'
+      WHEN 'accepted' THEN 'acceptée'
+      WHEN 'acceptee' THEN 'acceptée'
+      WHEN 'acceptée' THEN 'acceptée'
+      WHEN 'rejected' THEN 'refusée'
+      WHEN 'refusee' THEN 'refusée'
+      WHEN 'refusée' THEN 'refusée'
+      ELSE 'en_attente'
+    END
+  `);
+
   await queryDb(`
     ALTER TABLE recommended_offers
     ADD CONSTRAINT recommended_offers_status_check
-    CHECK (status IN ('pending', 'accepted', 'rejected', 'sent'))
+    CHECK (status IN ('en_attente', 'generée', 'envoyée', 'acceptée', 'refusée'))
   `);
 };
 
@@ -521,14 +592,14 @@ const upsertRecommendedOffer = async (args: {
   const query = `
     INSERT INTO recommended_offers
       (user_id, pack_id, tier, score, offer_payload, status, updated_at)
-    VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, 'pending', NOW())
+    VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, 'generée', NOW())
     ON CONFLICT (user_id)
     DO UPDATE SET
       pack_id       = EXCLUDED.pack_id,
       tier          = EXCLUDED.tier,
       score         = EXCLUDED.score,
       offer_payload = EXCLUDED.offer_payload,
-      status        = 'pending',
+      status        = 'generée',
       updated_at    = NOW()
     RETURNING offer_id, updated_at
   `;
@@ -680,13 +751,16 @@ export const saveRecommendationForGuest = async (
   guestId: string,
   recommendation: RecommendationResult
 ): Promise<{ offer_id: string; updated_at: string }> => {
-  const packId = recommendation.recommended_pack.pack_id ?? null;
+  const canonicalRecommendation = await recommendForGuest(guestId);
+  const normalizedRecommendation: RecommendationResult = canonicalRecommendation;
+
+  const packId = normalizedRecommendation.recommended_pack.pack_id ?? null;
   const row = await upsertRecommendedOffer({
     userId: guestId,
     packId,
-    tier: recommendation.tier,
-    score: recommendation.engagement_score,
-    payload: recommendation,
+    tier: normalizedRecommendation.tier,
+    score: normalizedRecommendation.engagement_score,
+    payload: normalizedRecommendation,
   });
 
   return {

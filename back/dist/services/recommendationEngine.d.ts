@@ -25,7 +25,7 @@ export interface RecommendationResult {
         reason: string;
     };
 }
-export type OfferStatus = "pending" | "accepted" | "rejected" | "sent";
+export type OfferStatus = "en_attente" | "generée" | "envoyée" | "acceptée" | "refusée";
 export interface StoredOfferRecord {
     offer_id: string;
     user_id: string;

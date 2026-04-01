@@ -4,6 +4,7 @@ import { Sparkles, Loader2, Search, X, RefreshCw, FileDown, CheckCircle2, Send, 
 import { useAppData } from "@/lib/db-client";
 import { getScoreBgColor } from "@/lib/scoring";
 import { Guest, UserRole, UserSource } from "@/lib/types";
+import { toast } from "sonner";
 
 type ServicePackItem = {
   id: string;
@@ -59,7 +60,7 @@ type RecommendApiResponse = {
   };
 };
 
-type OfferStatus = "pending" | "accepted" | "rejected" | "sent";
+type OfferStatus = "en_attente" | "generée" | "acceptée" | "refusée" | "envoyée";
 
 type StoredOfferRecord = {
   offer_id: string;
@@ -68,9 +69,37 @@ type StoredOfferRecord = {
   tier: string | null;
   score: number | null;
   offer_payload: RecommendApiResponse;
-  status: OfferStatus;
+  status: OfferStatus | string;
   created_at: string;
   updated_at: string;
+};
+
+const normalizeOfferStatus = (value: unknown): OfferStatus | null => {
+  const raw = String(value ?? "").trim().toLowerCase();
+  switch (raw) {
+    case "en_attente":
+    case "pending":
+      return "en_attente";
+    case "generée":
+    case "générée":
+    case "generee":
+    case "generated":
+      return "generée";
+    case "envoyée":
+    case "envoyee":
+    case "sent":
+      return "envoyée";
+    case "acceptée":
+    case "acceptee":
+    case "accepted":
+      return "acceptée";
+    case "refusée":
+    case "refusee":
+    case "rejected":
+      return "refusée";
+    default:
+      return null;
+  }
 };
 
 const normalizeServiceKey = (value: string) => value.trim().toUpperCase();
@@ -105,19 +134,21 @@ const sourceBadgeClasses: Record<UserSource, string> = {
 const sourceFilters: Array<"all" | UserSource> = ["all", "LinkedIn", "Facebook", "Instagram", "Twitter", "YouTube"];
 
 const statusLabel: Record<OfferStatus | "none", string> = {
-  none: "Offre non generee",
-  pending: "Offre generee",
-  accepted: "Offre acceptee",
-  rejected: "Offre refusee",
-  sent: "Offre envoyee",
+  none: "En attente",
+  en_attente: "En attente",
+  generée: "Offre generee",
+  acceptée: "Offre acceptee",
+  refusée: "Offre refusee",
+  envoyée: "Offre envoyee",
 };
 
 const statusClass: Record<OfferStatus | "none", string> = {
   none: "bg-slate-100 text-slate-600 border-slate-200",
-  pending: "bg-amber-100 text-amber-700 border-amber-200",
-  accepted: "bg-emerald-100 text-emerald-700 border-emerald-200",
-  rejected: "bg-red-100 text-red-700 border-red-200",
-  sent: "bg-blue-100 text-blue-700 border-blue-200",
+  en_attente: "bg-slate-100 text-slate-600 border-slate-200",
+  generée: "bg-amber-100 text-amber-700 border-amber-200",
+  acceptée: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  refusée: "bg-red-100 text-red-700 border-red-200",
+  envoyée: "bg-blue-100 text-blue-700 border-blue-200",
 };
 
 const normalizeError = (message: string) => {
@@ -425,11 +456,6 @@ function PackModal({
             <p className="text-2xl font-black text-slate-900">${pack.total_price}</p>
           </div>
 
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <p className="text-xs uppercase font-bold text-slate-500 tracking-wide mb-1">Summary</p>
-            <p className="text-sm text-slate-700">{pack.summary}</p>
-          </div>
-
           <div className="flex flex-wrap gap-2 justify-end">
             {!isEditMode && (
               <button
@@ -478,7 +504,7 @@ function OfferViewModal({
   guest,
   pack,
   onClose,
-  status = "pending",
+  status = "en_attente",
 }: {
   guest: Guest;
   pack: PersonalizedPack;
@@ -557,11 +583,6 @@ function OfferViewModal({
             <p className="text-2xl font-black text-slate-900">${pack.total_price}</p>
           </div>
 
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <p className="text-xs uppercase font-bold text-slate-500 tracking-wide mb-1">Summary</p>
-            <p className="text-sm text-slate-700">{pack.summary}</p>
-          </div>
-
           <div className="flex flex-wrap gap-2 justify-end">
             <button
               onClick={handleDownloadPdf}
@@ -605,7 +626,20 @@ export default function Users() {
       const rows = await res.json() as StoredOfferRecord[];
       const map: Record<string, StoredOfferRecord> = {};
       for (const row of rows) {
-        map[row.user_id] = row;
+        const normalizedStatus = normalizeOfferStatus(row.status) ?? "en_attente";
+        const normalizedRow: StoredOfferRecord = {
+          ...row,
+          status: normalizedStatus,
+        };
+
+        // Primary key from table
+        map[row.user_id] = normalizedRow;
+
+        // Fallback key used by UI rows when user_id differs from payload guest_id
+        const payloadGuestId = String(normalizedRow.offer_payload?.guest_id ?? "").trim();
+        if (payloadGuestId) {
+          map[payloadGuestId] = normalizedRow;
+        }
       }
       setSavedOffers(map);
     } catch {
@@ -656,6 +690,13 @@ export default function Users() {
         throw new Error("No services match your profile yet");
       }
 
+      // Business rule: regenerating a refused offer immediately restores generated status.
+      const currentStatus = normalizeOfferStatus(savedOffers[guest.id]?.status);
+      if (currentStatus === "refusée") {
+        await updateOfferStatus(guest.id, "generée");
+        await loadSavedOffers();
+      }
+
       setActivePack({ guest, pack });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to generate a personalized pack right now";
@@ -670,16 +711,38 @@ export default function Users() {
   };
 
   const savePackForGuest = async (guestId: string, pack: PersonalizedPack) => {
-    await saveAcceptedPack(guestId, pack);
-    await updateOfferStatus(guestId, "accepted");
-    await loadSavedOffers();
-  };
 
+    try {
+      await saveAcceptedPack(guestId, pack);
+      await loadSavedOffers();
+      toast.success("SAVED PACK", {
+        description: "Pack enregistre dans la base de donnees avec le statut Generee",
+        duration: 3000,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to save pack";
+      toast.error("SAVE FAILED", {
+        description: message,
+        duration: 4000,
+      });
+      throw err;
+    }
+  };
   const sendOfferForGuest = async (guestId: string) => {
     setSendingIds((prev) => new Set(prev).add(guestId));
     try {
-      await updateOfferStatus(guestId, "sent");
+      await updateOfferStatus(guestId, "envoyée");
       await loadSavedOffers();
+      toast.success("OFFER SENT", {
+        description: "Offer sent via mail successfully.",
+        duration: 3000,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to send offer";
+      toast.error("SEND FAILED", {
+        description: message,
+        duration: 4000,
+      });
     } finally {
       setSendingIds((prev) => {
         const next = new Set(prev);
@@ -793,6 +856,11 @@ export default function Users() {
                   const rowError = errorIds[guest.id];
                   const storedOffer = savedOffers[guest.id];
                   const offerStatus = storedOffer?.status ?? "none";
+                  const canGenerate = offerStatus === "none" || offerStatus === "en_attente";
+                  const canRegenerate = offerStatus === "refusée";
+                  const canEdit = Boolean(storedOffer) && (offerStatus === "generée" || offerStatus === "refusée");
+                  const canView = Boolean(storedOffer) && offerStatus !== "en_attente";
+                  const canSend = Boolean(storedOffer) && (offerStatus === "generée" || offerStatus === "refusée");
 
                   if (!(guest.id in liveScores)) {
                     void loadScoreForGuest(guest.id);
@@ -835,7 +903,7 @@ export default function Users() {
                           <div className="flex items-center gap-2">
                             <button
                               onClick={() => void generatePackForGuest(guest)}
-                              disabled={isGenerating || offerStatus === "sent" || offerStatus === "accepted"}
+                              disabled={isGenerating || (!canGenerate && !canRegenerate)}
                               className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-primary/10 text-primary rounded-lg text-xs font-semibold hover:bg-primary/20 transition-colors disabled:opacity-60 whitespace-nowrap"
                             >
                               {isGenerating ? (
@@ -846,7 +914,7 @@ export default function Users() {
                               ) : (
                                 <>
                                   <Sparkles className="h-3.5 w-3.5" />
-                                  {offerStatus === "pending" ? "Regenerate" : "Generate Offer"}
+                                  {canRegenerate ? "Regenerate Offer" : "Generate Offer"}
                                 </>
                               )}
                             </button>
@@ -855,7 +923,7 @@ export default function Users() {
                                 if (!storedOffer) return;
                                 setActivePack({ guest, pack: recommendationToPack(storedOffer.offer_payload), isEditMode: true });
                               }}
-                              disabled={!storedOffer || offerStatus === "sent" || offerStatus === "accepted"}
+                              disabled={!canEdit}
                               className="inline-flex items-center justify-center h-8 w-8 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-40"
                               title="Edit saved pack"
                             >
@@ -866,7 +934,7 @@ export default function Users() {
                                 if (!storedOffer) return;
                                 setViewingOffer({ guest, pack: recommendationToPack(storedOffer.offer_payload), status: storedOffer.status });
                               }}
-                              disabled={!storedOffer}
+                              disabled={!canView}
                               className="inline-flex items-center justify-center h-8 w-8 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-40"
                               title="View saved offer"
                             >
@@ -874,7 +942,7 @@ export default function Users() {
                             </button>
                             <button
                               onClick={() => void sendOfferForGuest(guest.id)}
-                              disabled={!storedOffer || storedOffer.status === "sent" || storedOffer.status === "accepted" || isSending}
+                              disabled={!canSend || isSending}
                               className="inline-flex items-center justify-center h-8 w-8 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-40"
                               title="Send offer"
                             >
@@ -913,7 +981,7 @@ export default function Users() {
         <OfferViewModal
           guest={viewingOffer.guest}
           pack={viewingOffer.pack}
-          status={viewingOffer.status || "pending"}
+          status={viewingOffer.status || "en_attente"}
           onClose={() => setViewingOffer(null)}
         />
       ) : null}

@@ -37,6 +37,7 @@ import type { Guest } from "@/lib/types";
 import { getOfferStatusBadgeClasses, getOfferStatusLabel } from "@/lib/offer-status";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
+import type { OfferStatus } from "@/lib/types";
 
 const StatCard = ({ icon: Icon, label, value, subValue, color }: {
   icon: React.ElementType; label: string; value: string | number; subValue?: string; color: string;
@@ -73,6 +74,12 @@ type RecommendationResponse = {
     services: string[];
     reason: string;
   };
+};
+
+type StoredOfferRecord = {
+  user_id: string;
+  status: OfferStatus | string;
+  offer_payload: RecommendationResponse;
 };
 
 // Derive extra data from our Guest type
@@ -124,12 +131,8 @@ function deriveGuestData(guest: Guest) {
 }
 
 const canRegenerate = (status: string) =>
-  status === "pending" ||
-  status === "approved" ||
-  status === "rejected" ||
-  status === "READY" ||
-  status === "DRAFT" ||
-  status === "PENDING";
+  status === "en_attente" ||
+  status === "refusée";
 
 export default function GuestDetail() {
   const { id } = useParams<{ id: string }>();
@@ -141,6 +144,7 @@ export default function GuestDetail() {
   const [savingPack, setSavingPack] = useState(false);
   const [savedPack, setSavedPack] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [offerStatus, setOfferStatus] = useState<OfferStatus>("en_attente");
   const { data, loading, error } = useAppData();
 
   const guests = data.guests;
@@ -170,6 +174,74 @@ export default function GuestDetail() {
     }
   };
 
+  const normalizeOfferStatus = (value: unknown): OfferStatus => {
+    const raw = String(value ?? "").trim().toLowerCase();
+    switch (raw) {
+      case "generée":
+      case "generee":
+      case "générée":
+      case "generated":
+        return "generée";
+      case "envoyée":
+      case "envoyee":
+      case "sent":
+        return "envoyée";
+      case "acceptée":
+      case "acceptee":
+      case "accepted":
+        return "acceptée";
+      case "refusée":
+      case "refusee":
+      case "rejected":
+        return "refusée";
+      default:
+        return "en_attente";
+    }
+  };
+
+  const loadSavedOffer = async (guestId: string) => {
+    try {
+      const res = await fetch("/api/recommend/offers");
+      if (!res.ok) {
+        setRecommendation(null);
+        setSavedPack(false);
+        setOfferStatus("en_attente");
+        return;
+      }
+
+      const rows = await res.json() as StoredOfferRecord[];
+      const found = rows.find((row) => {
+        const rowUserId = String(row.user_id ?? "").trim();
+        const payloadGuestId = String(row.offer_payload?.guest_id ?? "").trim();
+        return rowUserId === guestId || payloadGuestId === guestId;
+      });
+
+      if (!found) {
+        setRecommendation(null);
+        setSavedPack(false);
+        setOfferStatus("en_attente");
+        return;
+      }
+
+      const normalizedStatus = normalizeOfferStatus(found.status);
+      setOfferStatus(normalizedStatus);
+
+      // Keep "En attente" aligned with Users: no generated offer should be displayed.
+      if (normalizedStatus === "en_attente") {
+        setRecommendation(null);
+        setSavedPack(false);
+        return;
+      }
+
+      setRecommendation(found.offer_payload);
+      setSavedPack(true);
+    } catch {
+      setRecommendation(null);
+      setSavedPack(false);
+      setOfferStatus("en_attente");
+    }
+  };
+
   const saveCurrentPack = async () => {
     if (!id || !recommendation) return;
     setSavingPack(true);
@@ -187,7 +259,9 @@ export default function GuestDetail() {
         throw new Error(body.error || `Save API error ${res.status}`);
       }
 
+      await loadSavedOffer(id);
       setSavedPack(true);
+      setOfferStatus("generée");
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "Failed to save pack");
     } finally {
@@ -197,7 +271,7 @@ export default function GuestDetail() {
 
   useEffect(() => {
     if (!id) return;
-    void loadRecommendation(id);
+    void loadSavedOffer(id);
   }, [id]);
 
   if (loading) {
@@ -461,8 +535,8 @@ export default function GuestDetail() {
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden max-w-3xl mx-auto">
             <div className="p-6 border-b border-slate-200">
               <div className="flex items-center justify-between mb-3">
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">
-                  <span className="w-2 h-2 rounded-full bg-amber-500" /> Offre Generee
+                <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${getOfferStatusBadgeClasses(recommendation ? offerStatus : "en_attente")}`}>
+                  <span className="w-2 h-2 rounded-full bg-current opacity-70" /> {getOfferStatusLabel(recommendation ? offerStatus : "en_attente")}
                 </span>
                 <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-slate-900 text-white border border-slate-900">
                   Powered by Groq
@@ -526,22 +600,16 @@ export default function GuestDetail() {
                 <p className="text-2xl font-black text-slate-900">$0</p>
               </div>
 
-              <div className="rounded-xl border border-slate-200 bg-white p-4">
-                <p className="text-xs uppercase font-bold text-slate-500 tracking-wide mb-1">Summary</p>
-                <p className="text-sm text-slate-700">
-                  {recommendation?.recommended_pack?.reason ?? "Recommendation not available yet."}
-                </p>
-              </div>
-
               {recommendationError ? <p className="text-xs text-destructive">Recommendation error: {recommendationError}</p> : null}
               {saveError ? <p className="text-xs text-destructive">Save error: {saveError}</p> : null}
 
               <div className="flex flex-wrap gap-2 justify-end">
-                {canRegenerate("pending") && (
+                {canRegenerate(recommendation ? offerStatus : "en_attente") && (
                   <button
                     onClick={() => {
                       if (id) {
                         setSavedPack(false);
+                        setOfferStatus("en_attente");
                         void loadRecommendation(id);
                       }
                     }}
@@ -549,7 +617,7 @@ export default function GuestDetail() {
                     className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60"
                   >
                     <RefreshCw className="h-4 w-4" />
-                    {recommendationLoading ? "Loading..." : "Regenerate"}
+                    {recommendationLoading ? "Loading..." : recommendation ? "Regenerate" : "Generate Offer"}
                   </button>
                 )}
                 <button

@@ -1,3 +1,18 @@
+export type LeadScoringKpiKey = "session_duration" | "rooms_visited" | "voice_time" | "interactions" | "idle_time" | "guest_score" | "room_score" | "engagement_score" | "score";
+export interface LeadScoringWeightRow {
+    kpi_key: LeadScoringKpiKey | string;
+    label: string;
+    category: string;
+    weight: number;
+    is_default: boolean;
+    created_at: string;
+    updated_at: string;
+}
+export interface LeadScoringKpiOption {
+    kpi_key: string;
+    label: string;
+    category: string;
+}
 export type ScoreTier = "Solo" | "Duo" | "Trio" | "All-Access";
 export interface ScoreBreakdown {
     guest_score: number;
@@ -37,6 +52,9 @@ export interface StoredOfferRecord {
     created_at: string;
     updated_at: string;
 }
+export declare const getLeadScoringWeights: () => Promise<LeadScoringWeightRow[]>;
+export declare const saveLeadScoringWeights: (rows: Array<Pick<LeadScoringWeightRow, "kpi_key" | "label" | "category" | "weight" | "is_default">>) => Promise<LeadScoringWeightRow[]>;
+export declare const getAvailableRecommendedOfferKpis: () => Promise<LeadScoringKpiOption[]>;
 export declare const getGuestScore: (guestId: string) => Promise<Omit<GuestScoreResult, "guest_id"> & {
     guest_id: string;
 }>;

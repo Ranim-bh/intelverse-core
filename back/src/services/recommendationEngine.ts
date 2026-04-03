@@ -1,17 +1,52 @@
 import Groq from "groq-sdk";
 import { queryDb } from "./db.js";
 
-const WEIGHTS = {
-  session_duration: 20,
-  interaction_count: 15,
-  room_click_rate: 15,
-  voice_interaction_time: 10,
-  customization_time: 10,
-  idle_time_inverted: 10,
-  room_time_top: 10,
-  room_interactions_top: 5,
-  room_sessions_top: 5,
-} as const;
+export type LeadScoringKpiKey =
+  | "session_duration"
+  | "rooms_visited"
+  | "voice_time"
+  | "interactions"
+  | "idle_time"
+  | "guest_score"
+  | "room_score"
+  | "engagement_score"
+  | "score";
+
+export interface LeadScoringWeightRow {
+  kpi_key: LeadScoringKpiKey | string;
+  label: string;
+  category: string;
+  weight: number;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LeadScoringKpiOption {
+  kpi_key: string;
+  label: string;
+  category: string;
+}
+
+const DEFAULT_LEAD_SCORING_ROWS: Array<Pick<LeadScoringWeightRow, "kpi_key" | "label" | "category" | "weight" | "is_default">> = [
+  { kpi_key: "session_duration", label: "Durée session", category: "Engagement", weight: 35, is_default: true },
+  { kpi_key: "rooms_visited", label: "Rooms visitées", category: "Engagement", weight: 25, is_default: true },
+  { kpi_key: "voice_time", label: "Temps vocal", category: "Engagement", weight: 20, is_default: true },
+  { kpi_key: "interactions", label: "Interactions", category: "Engagement", weight: 15, is_default: true },
+  { kpi_key: "idle_time", label: "Idle time", category: "Engagement", weight: 5, is_default: true },
+];
+
+const KPI_LABELS: Record<string, { label: string; category: string }> = {
+  session_duration: { label: "Durée session", category: "Engagement" },
+  rooms_visited: { label: "Rooms visitées", category: "Engagement" },
+  voice_time: { label: "Temps vocal", category: "Engagement" },
+  interactions: { label: "Interactions", category: "Engagement" },
+  idle_time: { label: "Idle time", category: "Engagement" },
+  guest_score: { label: "Guest score", category: "Scoring" },
+  room_score: { label: "Room score", category: "Scoring" },
+  engagement_score: { label: "Engagement score", category: "Scoring" },
+  score: { label: "Global score", category: "Scoring" },
+};
 
 export type ScoreTier = "Solo" | "Duo" | "Trio" | "All-Access";
 
@@ -164,6 +199,12 @@ interface UpsertOfferRow {
   updated_at: string;
 }
 
+interface ScoreWeightsDbRow {
+  metric_name: string;
+  weight: string | number;
+  updated_at: string;
+}
+
 interface StoredOfferDbRow {
   offer_id: string;
   user_id: string;
@@ -271,6 +312,100 @@ const parseCsvList = (value: string): string[] =>
     .split(",")
     .map((v) => v.trim())
     .filter(Boolean);
+
+const RESERVED_METRIC_KEYS = new Set([
+  "kpi_id",
+  "id",
+  "user_id",
+  "guest_id",
+  "service_id",
+  "pack_id",
+  "offer_id",
+  "calculated_at",
+  "created_at",
+  "updated_at",
+  "status",
+]);
+
+const isNumericColumn = (dataType: string, udtName: string): boolean => {
+  const normalized = String(dataType ?? "").toLowerCase();
+  const udt = String(udtName ?? "").toLowerCase();
+  return (
+    normalized === "smallint"
+    || normalized === "integer"
+    || normalized === "bigint"
+    || normalized === "numeric"
+    || normalized === "real"
+    || normalized === "double precision"
+    || udt === "int2"
+    || udt === "int4"
+    || udt === "int8"
+    || udt === "float4"
+    || udt === "float8"
+    || udt === "numeric"
+  );
+};
+
+const getNumericColumnsForTable = async (tableName: string): Promise<string[]> => {
+  const columns = await queryDb<{
+    column_name: string;
+    data_type: string;
+    udt_name: string;
+  }>(
+    `
+      SELECT column_name, data_type, udt_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = $1
+      ORDER BY ordinal_position ASC
+    `,
+    [tableName]
+  );
+
+  return columns.rows
+    .map((col) => ({
+      key: String(col.column_name ?? "").trim(),
+      isNumeric: isNumericColumn(col.data_type, col.udt_name),
+    }))
+    .filter((col) => col.key && col.isNumeric && !RESERVED_METRIC_KEYS.has(col.key))
+    .map((col) => col.key);
+};
+
+const buildAliasMetricMap = (
+  guestRaw: Record<string, number>,
+  roomRaw: Record<string, number>,
+  roomsVisitedRaw: number
+): Record<string, number> => ({
+  session_duration: toNum(guestRaw.session_duration),
+  rooms_visited: toNum(roomsVisitedRaw),
+  voice_time: toNum(guestRaw.voice_interaction_time),
+  interactions: toNum(guestRaw.interaction_count),
+  idle_time: toNum(guestRaw.idle_time),
+  voice_interaction_time: toNum(guestRaw.voice_interaction_time),
+  interaction_count: toNum(guestRaw.interaction_count),
+  room_click_rate: toNum(guestRaw.room_click_rate),
+  ...guestRaw,
+  ...roomRaw,
+});
+
+const computeWeightedAverage = (
+  metricValues: Record<string, number>,
+  weightByKey: Record<string, number>,
+  eligibleKeys: string[]
+): number => {
+  const scopedWeights = eligibleKeys
+    .map((key) => ({ key, weight: Math.max(0, Number(weightByKey[key] ?? 0)) }))
+    .filter((item) => item.weight > 0 && Number.isFinite(metricValues[item.key]));
+
+  const totalWeight = scopedWeights.reduce((sum, item) => sum + item.weight, 0);
+  if (totalWeight <= 0) return 0;
+
+  const weighted = scopedWeights.reduce((sum, item) => {
+    return sum + (metricValues[item.key] ?? 0) * (item.weight / totalWeight);
+  }, 0);
+
+  return Math.max(0, Math.min(100, weighted));
+};
 
 const fetchGuestKpis = async (
   guestId: string,
@@ -580,6 +715,229 @@ const ensureRecommendedOffersTable = async (): Promise<void> => {
   `);
 };
 
+const ensureLeadScoringWeightsTable = async (): Promise<void> => {
+  await queryDb(`
+    CREATE TABLE IF NOT EXISTS score_weights (
+      id SERIAL PRIMARY KEY,
+      metric_name VARCHAR(50) UNIQUE NOT NULL,
+      weight NUMERIC NOT NULL DEFAULT 1,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  for (const row of DEFAULT_LEAD_SCORING_ROWS) {
+    await queryDb(
+      `
+      INSERT INTO score_weights (metric_name, weight, updated_at)
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (metric_name)
+      DO NOTHING
+      `,
+      [row.kpi_key, row.weight]
+    );
+  }
+};
+
+const ensureUserScoresTable = async (): Promise<void> => {
+  await queryDb(`
+    CREATE TABLE IF NOT EXISTS user_scores (
+      user_id UUID PRIMARY KEY,
+      score NUMERIC NOT NULL,
+      engagement_level VARCHAR(10) NOT NULL,
+      calculated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT user_scores_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(user_id)
+    )
+  `);
+};
+
+const normalizeLeadWeightRows = (rows: LeadScoringWeightRow[]): LeadScoringWeightRow[] => {
+  const seen = new Set<string>();
+  return rows
+    .map((row) => {
+      const kpiKey = String(row.kpi_key ?? "").trim();
+      if (!kpiKey || seen.has(kpiKey)) return null;
+      seen.add(kpiKey);
+      const normalizedWeight = Number.isFinite(Number(row.weight))
+        ? Math.max(0, Math.min(100, Number(row.weight)))
+        : 0;
+      const fallbackMeta = KPI_LABELS[kpiKey] ?? { label: kpiKey, category: "Custom" };
+      return {
+        ...row,
+        kpi_key: kpiKey,
+        label: String(row.label ?? "").trim() || fallbackMeta.label,
+        category: String(row.category ?? "").trim() || fallbackMeta.category,
+        weight: normalizedWeight,
+      } as LeadScoringWeightRow;
+    })
+    .filter((row): row is LeadScoringWeightRow => row !== null);
+};
+
+export const getLeadScoringWeights = async (): Promise<LeadScoringWeightRow[]> => {
+  await ensureLeadScoringWeightsTable();
+  const result = await queryDb<ScoreWeightsDbRow>(`
+    SELECT
+      metric_name,
+      weight::numeric,
+      updated_at::text
+    FROM score_weights
+    ORDER BY metric_name ASC
+  `);
+
+  const mappedRows: LeadScoringWeightRow[] = result.rows.map((row) => {
+    const key = String(row.metric_name ?? "").trim();
+    const fallbackMeta = KPI_LABELS[key] ?? { label: key, category: "Custom" };
+    return {
+      kpi_key: key,
+      label: fallbackMeta.label,
+      category: fallbackMeta.category,
+      weight: Number(row.weight ?? 0),
+      is_default: false,
+      created_at: String(row.updated_at ?? ""),
+      updated_at: String(row.updated_at ?? ""),
+    };
+  });
+
+  return normalizeLeadWeightRows(mappedRows);
+};
+
+export const saveLeadScoringWeights = async (
+  rows: Array<Pick<LeadScoringWeightRow, "kpi_key" | "label" | "category" | "weight" | "is_default">>
+): Promise<LeadScoringWeightRow[]> => {
+  await ensureLeadScoringWeightsTable();
+  const normalizedRows = normalizeLeadWeightRows(
+    rows.map((row) => ({
+      ...row,
+      created_at: "",
+      updated_at: "",
+    }))
+  );
+
+  const total = normalizedRows.reduce((sum, row) => sum + Number(row.weight || 0), 0);
+  if (normalizedRows.length < 3) {
+    const err = new Error("At least 3 criteria are required");
+    (err as Error & { status?: number }).status = 400;
+    throw err;
+  }
+
+  if (total > 100) {
+    const err = new Error("Total weight cannot exceed 100");
+    (err as Error & { status?: number }).status = 400;
+    throw err;
+  }
+
+  await queryDb("BEGIN");
+  try {
+    // Replace full set to avoid UPDATE statements that can fire external DB triggers.
+    await queryDb("DELETE FROM score_weights");
+
+    for (const row of normalizedRows) {
+      await queryDb(
+        `
+        INSERT INTO score_weights (metric_name, weight, updated_at)
+        VALUES ($1, $2, NOW())
+        `,
+        [row.kpi_key, row.weight]
+      );
+    }
+    await queryDb("COMMIT");
+  } catch (error) {
+    await queryDb("ROLLBACK");
+    throw error;
+  }
+
+  return getLeadScoringWeights();
+};
+
+export const getAvailableRecommendedOfferKpis = async (): Promise<LeadScoringKpiOption[]> => {
+  const existingTables = await queryDb<{ table_name: string }>(`
+    SELECT table_name
+    FROM information_schema.tables
+    WHERE table_schema = 'public'
+      AND table_name IN ('guest_kpis', 'room_kpi')
+  `);
+
+  const tables = existingTables.rows.map((row) => row.table_name).filter(Boolean);
+  if (!tables.length) {
+    return [];
+  }
+
+  const columns = await queryDb<{
+    table_name: string;
+    column_name: string;
+    data_type: string;
+    udt_name: string;
+  }>(
+    `
+      SELECT table_name, column_name, data_type, udt_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = ANY($1::text[])
+      ORDER BY table_name ASC, column_name ASC
+    `,
+    [tables]
+  );
+
+  const reserved = new Set([
+    "kpi_id",
+    "id",
+    "user_id",
+    "guest_id",
+    "service_id",
+    "pack_id",
+    "offer_id",
+    "calculated_at",
+    "created_at",
+    "updated_at",
+    "status",
+  ]);
+
+  const isNumeric = (dataType: string, udtName: string): boolean => {
+    const normalized = String(dataType ?? "").toLowerCase();
+    const udt = String(udtName ?? "").toLowerCase();
+    return (
+      normalized === "smallint"
+      || normalized === "integer"
+      || normalized === "bigint"
+      || normalized === "numeric"
+      || normalized === "real"
+      || normalized === "double precision"
+      || udt === "int2"
+      || udt === "int4"
+      || udt === "int8"
+      || udt === "float4"
+      || udt === "float8"
+      || udt === "numeric"
+    );
+  };
+
+  const humanize = (key: string): string =>
+    key
+      .replace(/_/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+  const unique = new Map<string, LeadScoringKpiOption>();
+
+  for (const col of columns.rows) {
+    const key = String(col.column_name ?? "").trim();
+    if (!key || reserved.has(key)) continue;
+    if (!isNumeric(col.data_type, col.udt_name)) continue;
+    if (unique.has(key)) continue;
+
+    const meta = KPI_LABELS[key];
+    const category = col.table_name === "room_kpi" ? "Room KPI" : "Guest KPI";
+
+    unique.set(key, {
+      kpi_key: key,
+      label: meta?.label ?? humanize(key),
+      category: meta?.category ?? category,
+    });
+  }
+
+  return Array.from(unique.values()).sort((a, b) => a.label.localeCompare(b.label));
+};
+
 const upsertRecommendedOffer = async (args: {
   userId: string;
   packId: string | null;
@@ -623,30 +981,207 @@ const computeScore = async (guestId: string): Promise<GuestScoreResult> => {
   const tables = await resolveTables();
   const guest = await fetchGuestKpis(guestId, tables);
   const roomRows = await fetchRoomKpis(guestId, tables);
-  const { guestBounds, roomBounds } = await fetchBounds(tables);
+  const weights = await getLeadScoringWeights();
+  const weightByKey = Object.fromEntries(weights.map((row) => [String(row.kpi_key), Number(row.weight || 0)]));
 
-  const guestScore =
-    normalize(toNum(guest.session_duration), toNum(guestBounds.max_sd)) * WEIGHTS.session_duration +
-    normalize(toNum(guest.interaction_count), toNum(guestBounds.max_ic)) * WEIGHTS.interaction_count +
-    normalize(toNum(guest.room_click_rate), toNum(guestBounds.max_rcr)) * WEIGHTS.room_click_rate +
-    normalize(toNum(guest.voice_interaction_time), toNum(guestBounds.max_vit)) * WEIGHTS.voice_interaction_time +
-    normalize(toNum(guest.customization_time), toNum(guestBounds.max_ct)) * WEIGHTS.customization_time +
-    clamp01(1 - normalize(toNum(guest.idle_time), toNum(guestBounds.max_it))) * WEIGHTS.idle_time_inverted;
+  const selectedKeys = Array.from(new Set(weights.map((row) => String(row.kpi_key)).filter(Boolean)));
+  const metaKeys = new Set(["guest_score", "room_score", "engagement_score", "score"]);
+  const primitiveKeys = selectedKeys.filter((key) => !metaKeys.has(key));
+
+  const guestNumericColumns = await getNumericColumnsForTable(tables.guestTable);
+  const roomNumericColumns = await getNumericColumnsForTable(tables.roomKpiTable);
+
+  const selectedGuestColumns = primitiveKeys.filter((key) => guestNumericColumns.includes(key));
+  const selectedRoomColumns = primitiveKeys.filter((key) => roomNumericColumns.includes(key));
+
+  const guestTable = quoteIdentifier(tables.guestTable);
+  const guestIdColumn = tables.guestTable === "guest_kpis" ? "user_id" : "id";
+
+  const guestSelectColumns = selectedGuestColumns.length
+    ? selectedGuestColumns.map((col) => `${quoteIdentifier(col)}::numeric AS ${quoteIdentifier(col)}`).join(",\n        ")
+    : "1::numeric AS __placeholder";
+
+  const guestRawResult = await queryDb<Record<string, unknown>>(
+    `
+      SELECT
+        ${guestSelectColumns}
+      FROM ${guestTable}
+      WHERE ${quoteIdentifier(guestIdColumn)} = $1
+      LIMIT 1
+    `,
+    [guestId]
+  );
+
+  const guestRawRow = guestRawResult.rows[0] ?? {};
+  const guestRaw: Record<string, number> = {};
+  for (const key of selectedGuestColumns) {
+    guestRaw[key] = toNum((guestRawRow as Record<string, unknown>)[key]);
+  }
+
+  const guestMaxRaw: Record<string, number> = {};
+  if (selectedGuestColumns.length) {
+    const guestMaxSelect = selectedGuestColumns
+      .map((col) => `MAX(${quoteIdentifier(col)})::numeric AS ${quoteIdentifier(col)}`)
+      .join(",\n        ");
+
+    const guestMaxResult = await queryDb<Record<string, unknown>>(
+      `
+        SELECT
+          ${guestMaxSelect}
+        FROM ${guestTable}
+      `
+    );
+
+    const maxRow = guestMaxResult.rows[0] ?? {};
+    for (const key of selectedGuestColumns) {
+      guestMaxRaw[key] = toNum((maxRow as Record<string, unknown>)[key]);
+    }
+  }
+
+  const roomRaw: Record<string, number> = {};
+  const roomMaxRaw: Record<string, number> = {};
+  const roomKpiTable = quoteIdentifier(tables.roomKpiTable);
+
+  if (selectedRoomColumns.length) {
+    const roomSumSelect = selectedRoomColumns
+      .map((col) => `SUM(${quoteIdentifier(col)})::numeric AS ${quoteIdentifier(col)}`)
+      .join(",\n        ");
+
+    const roomRawResult = await queryDb<Record<string, unknown>>(
+      `
+        SELECT
+          ${roomSumSelect}
+        FROM ${roomKpiTable}
+        WHERE user_id = $1
+      `,
+      [guestId]
+    );
+
+    const roomRow = roomRawResult.rows[0] ?? {};
+    for (const key of selectedRoomColumns) {
+      roomRaw[key] = toNum((roomRow as Record<string, unknown>)[key]);
+    }
+
+    const roomMaxInnerSelect = selectedRoomColumns
+      .map((col) => `SUM(${quoteIdentifier(col)})::numeric AS ${quoteIdentifier(col)}`)
+      .join(",\n            ");
+    const roomMaxOuterSelect = selectedRoomColumns
+      .map((col) => `MAX(${quoteIdentifier(col)})::numeric AS ${quoteIdentifier(col)}`)
+      .join(",\n          ");
+
+    const roomMaxResult = await queryDb<Record<string, unknown>>(
+      `
+        SELECT
+          ${roomMaxOuterSelect}
+        FROM (
+          SELECT
+            user_id,
+            ${roomMaxInnerSelect}
+          FROM ${roomKpiTable}
+          GROUP BY user_id
+        ) t
+      `
+    );
+
+    const roomMaxRow = roomMaxResult.rows[0] ?? {};
+    for (const key of selectedRoomColumns) {
+      roomMaxRaw[key] = toNum((roomMaxRow as Record<string, unknown>)[key]);
+    }
+  }
+
+  const roomsVisitedRawResult = await queryDb<{ rooms_visited: number }>(
+    `
+      SELECT COUNT(DISTINCT service_id)::int AS rooms_visited
+      FROM ${roomKpiTable}
+      WHERE user_id = $1
+    `,
+    [guestId]
+  );
+  const roomsVisitedRaw = toNum(roomsVisitedRawResult.rows[0]?.rooms_visited ?? 0);
+
+  const roomsVisitedMaxResult = await queryDb<{ max_rooms_visited: number }>(
+    `
+      SELECT COALESCE(MAX(cnt), 0)::int AS max_rooms_visited
+      FROM (
+        SELECT user_id, COUNT(DISTINCT service_id) AS cnt
+        FROM ${roomKpiTable}
+        GROUP BY user_id
+      ) t
+    `
+  );
+  const roomsVisitedMax = toNum(roomsVisitedMaxResult.rows[0]?.max_rooms_visited ?? 0);
 
   const topByTime = roomRows[0];
   const topByInteractions = [...roomRows].sort(
     (a, b) => b.total_interactions_in_room - a.total_interactions_in_room
   )[0];
 
-  const roomScore = topByTime
-    ? normalize(topByTime.total_time_in_room, toNum(roomBounds.max_room_time)) * WEIGHTS.room_time_top +
-      normalize(topByTime.total_interactions_in_room, toNum(roomBounds.max_room_int)) * WEIGHTS.room_interactions_top +
-      normalize(topByTime.nb_sessions_in_room, toNum(roomBounds.max_room_sess)) * WEIGHTS.room_sessions_top
-    : 0;
+  const rawMetricValues = buildAliasMetricMap(guestRaw, roomRaw, roomsVisitedRaw);
+  const rawMetricMaxValues = buildAliasMetricMap(guestMaxRaw, roomMaxRaw, roomsVisitedMax);
+
+  const primitiveMetricMap: Record<string, number> = {};
+  for (const key of primitiveKeys) {
+    const raw = toNum(rawMetricValues[key]);
+    const max = toNum(rawMetricMaxValues[key]);
+    const normalized = key === "idle_time"
+      ? clamp01(1 - normalize(raw, max)) * 100
+      : normalize(raw, max) * 100;
+    primitiveMetricMap[key] = Math.max(0, Math.min(100, normalized));
+  }
+
+  const guestMetricKeys = primitiveKeys.filter((key) => selectedGuestColumns.includes(key)
+    || key === "session_duration"
+    || key === "voice_time"
+    || key === "interactions"
+    || key === "idle_time"
+    || key === "interaction_count"
+    || key === "voice_interaction_time"
+    || key === "room_click_rate");
+
+  const roomMetricKeys = primitiveKeys.filter((key) => selectedRoomColumns.includes(key) || key === "rooms_visited");
+
+  const guestScoreBase = computeWeightedAverage(primitiveMetricMap, weightByKey, guestMetricKeys);
+  const roomScoreBase = computeWeightedAverage(primitiveMetricMap, weightByKey, roomMetricKeys);
+  const engagementComposite = Math.max(0, Math.min(100, (guestScoreBase + roomScoreBase) / 2));
+
+  const metricMap: Record<string, number> = {
+    ...primitiveMetricMap,
+    guest_score: guestScoreBase,
+    room_score: roomScoreBase,
+    engagement_score: engagementComposite,
+    score: engagementComposite,
+  };
+
+  const totalWeight = weights.reduce((sum, row) => sum + Number(row.weight || 0), 0);
+  const safeTotalWeight = totalWeight > 0 ? totalWeight : 100;
+  const weightedScore = weights.reduce((sum, row) => {
+    const key = String(row.kpi_key);
+    const metricValue = toNum(metricMap[key]);
+    return sum + metricValue * (Number(row.weight || 0) / safeTotalWeight);
+  }, 0);
+
+  const guestScore = Math.round(guestScoreBase);
+  const roomScore = Math.round(roomScoreBase);
 
   const topRoom = topByTime?.room_name || String(guest.most_viewed_room ?? "UNKNOWN");
   const topRoomByInteractions = topByInteractions?.room_name || topRoom;
-  const engagementScore = Math.round(Math.max(0, Math.min(100, guestScore + roomScore)));
+  const engagementScore = Math.round(Math.max(0, Math.min(100, weightedScore)));
+
+  await ensureUserScoresTable();
+  const engagementLevel = engagementScore > 70 ? "hot" : (engagementScore >= 40 ? "warm" : "cold");
+  await queryDb(
+    `
+      INSERT INTO user_scores (user_id, score, engagement_level, calculated_at)
+      VALUES ($1::uuid, $2, $3, NOW())
+      ON CONFLICT (user_id)
+      DO UPDATE SET
+        score = EXCLUDED.score,
+        engagement_level = EXCLUDED.engagement_level,
+        calculated_at = NOW()
+    `,
+    [guestId, engagementScore, engagementLevel]
+  );
+
   const { tier } = resolveTier(engagementScore);
 
   return {

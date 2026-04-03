@@ -3,7 +3,8 @@ import cors from "cors";
 import dotenv from "dotenv";
 import Groq from "groq-sdk";
 import { loadDataset as loadTable, loadDatasets as loadTables, } from "./services/datasetLoader.js";
-import { getGuestScore, recommendForGuest, saveRecommendationForGuest, listRecommendedOffers, updateRecommendedOfferStatus, } from "./services/recommendationEngine.js";
+import { getGuestScore, recommendForGuest, saveRecommendationForGuest, listRecommendedOffers, updateRecommendedOfferStatus, getLeadScoringWeights, saveLeadScoringWeights, getAvailableRecommendedOfferKpis, } from "./services/recommendationEngine.js";
+import { getDbPool, queryDb } from "./services/db.js";
 dotenv.config();
 const app = express();
 const PORT = Number(process.env.PORT) || 5000;
@@ -12,6 +13,205 @@ app.use(express.json());
 const GROQ_API_KEY = (process.env.GROQ_API_KEY ?? "").trim();
 const SERVICES_TABLE_KEY = (process.env.SERVICES_TABLE_KEY ?? "services").trim().toLowerCase();
 const groq = new Groq({ apiKey: GROQ_API_KEY });
+const DEFAULT_ACCESS_ROLES = [
+    { id: "guest", name: "Guest", isDefault: true },
+    { id: "client", name: "Client", isDefault: true },
+    { id: "partenaire", name: "Partenaire", isDefault: true },
+];
+const DEFAULT_ACCESS_SERVICES = [
+    { id: "training_center", name: "Training Center" },
+    { id: "pitch_room", name: "Pitch Room" },
+    { id: "showcase_room", name: "Showcase Room" },
+    { id: "opportunity_room", name: "Opportunity Room" },
+];
+const DEFAULT_ACCESS_GRANTS = {
+    guest: ["showcase_room"],
+    client: ["training_center", "showcase_room", "opportunity_room"],
+    partenaire: ["training_center", "pitch_room", "showcase_room", "opportunity_room"],
+};
+const slugifyId = (value) => value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+const createEntityId = (name) => {
+    const base = slugifyId(name) || "item";
+    return `${base}_${Date.now()}`;
+};
+const toSafeIdentifier = (name) => {
+    if (!/^[a-zA-Z0-9_]+$/.test(name)) {
+        throw new Error(`Unsupported identifier '${name}'`);
+    }
+    return `"${name.replace(/"/g, '""')}"`;
+};
+const getTableColumns = async (tableName) => {
+    const result = await queryDb(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema='public' AND table_name=$1
+  `, [tableName]);
+    return new Set(result.rows.map((row) => String(row.column_name).toLowerCase()));
+};
+const ensureAccessMatrixTables = async () => {
+    await queryDb(`
+    CREATE TABLE IF NOT EXISTS admin_roles (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      is_default BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+    await queryDb(`
+    CREATE TABLE IF NOT EXISTS admin_services (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+    await queryDb(`
+    CREATE TABLE IF NOT EXISTS admin_access_matrix (
+      role_id TEXT NOT NULL REFERENCES admin_roles(id) ON DELETE CASCADE,
+      service_id TEXT NOT NULL REFERENCES admin_services(id) ON DELETE CASCADE,
+      has_access BOOLEAN NOT NULL DEFAULT false,
+      PRIMARY KEY (role_id, service_id)
+    )
+  `);
+    const roleCount = await queryDb("SELECT COUNT(*)::text AS count FROM admin_roles");
+    const serviceCount = await queryDb("SELECT COUNT(*)::text AS count FROM admin_services");
+    if (Number(roleCount.rows[0]?.count ?? 0) === 0) {
+        for (const role of DEFAULT_ACCESS_ROLES) {
+            await queryDb(`INSERT INTO admin_roles (id, name, is_default) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING`, [role.id, role.name, role.isDefault]);
+        }
+    }
+    if (Number(serviceCount.rows[0]?.count ?? 0) === 0) {
+        for (const service of DEFAULT_ACCESS_SERVICES) {
+            await queryDb(`INSERT INTO admin_services (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`, [service.id, service.name]);
+        }
+    }
+    const matrixCount = await queryDb("SELECT COUNT(*)::text AS count FROM admin_access_matrix");
+    if (Number(matrixCount.rows[0]?.count ?? 0) === 0) {
+        const roles = await queryDb("SELECT id, name, is_default AS \"isDefault\" FROM admin_roles");
+        const services = await queryDb("SELECT id, name FROM admin_services");
+        for (const role of roles.rows) {
+            for (const service of services.rows) {
+                const granted = Boolean(DEFAULT_ACCESS_GRANTS[role.id]?.includes(service.id));
+                await queryDb(`
+          INSERT INTO admin_access_matrix (role_id, service_id, has_access)
+          VALUES ($1, $2, $3)
+          ON CONFLICT (role_id, service_id) DO NOTHING
+        `, [role.id, service.id, granted]);
+            }
+        }
+    }
+};
+const mirrorServiceToCoreTable = async (service) => {
+    const tableExists = await queryDb(`
+    SELECT EXISTS(
+      SELECT 1 FROM information_schema.tables
+      WHERE table_schema='public' AND table_name='service'
+    ) AS exists
+  `);
+    if (!tableExists.rows[0]?.exists) {
+        return;
+    }
+    const columns = await getTableColumns("service");
+    const insertColumns = [];
+    const values = [];
+    const placeholders = [];
+    if (columns.has("service_id")) {
+        insertColumns.push("service_id");
+        values.push(service.id.toUpperCase());
+        placeholders.push(`$${values.length}`);
+    }
+    if (columns.has("service_name")) {
+        insertColumns.push("service_name");
+        values.push(service.name);
+        placeholders.push(`$${values.length}`);
+    }
+    else if (columns.has("service")) {
+        insertColumns.push("service");
+        values.push(service.name);
+        placeholders.push(`$${values.length}`);
+    }
+    else if (columns.has("name")) {
+        insertColumns.push("name");
+        values.push(service.name);
+        placeholders.push(`$${values.length}`);
+    }
+    if (columns.has("price")) {
+        insertColumns.push("price");
+        values.push(0);
+        placeholders.push(`$${values.length}`);
+    }
+    if (!insertColumns.length)
+        return;
+    try {
+        await queryDb(`INSERT INTO service (${insertColumns.join(", ")}) VALUES (${placeholders.join(", ")})`, values);
+    }
+    catch {
+        // Ignore duplicate conflicts without preventing admin matrix updates.
+    }
+};
+const syncUsersRoleConstraint = async () => {
+    const tableExists = await queryDb(`
+    SELECT EXISTS(
+      SELECT 1 FROM information_schema.tables
+      WHERE table_schema='public' AND table_name='users'
+    ) AS exists
+  `);
+    if (!tableExists.rows[0]?.exists)
+        return;
+    const columns = await getTableColumns("users");
+    if (!columns.has("role"))
+        return;
+    const roles = await queryDb("SELECT name FROM admin_roles ORDER BY created_at ASC");
+    const existing = await queryDb("SELECT DISTINCT role FROM users WHERE role IS NOT NULL");
+    const all = new Set();
+    for (const row of roles.rows)
+        all.add(String(row.name).trim());
+    for (const row of existing.rows)
+        all.add(String(row.role ?? "").trim());
+    const allowed = Array.from(all).filter(Boolean);
+    if (!allowed.length)
+        return;
+    const constraints = await queryDb(`
+    SELECT conname, pg_get_constraintdef(c.oid) AS def
+    FROM pg_constraint c
+    WHERE c.conrelid = 'users'::regclass
+      AND c.contype = 'c'
+  `);
+    for (const row of constraints.rows) {
+        const def = String(row.def ?? "").toLowerCase();
+        if (def.includes("role")) {
+            await queryDb(`ALTER TABLE users DROP CONSTRAINT IF EXISTS ${toSafeIdentifier(row.conname)}`);
+        }
+    }
+    const allowedSql = allowed.map((value) => `'${value.replace(/'/g, "''")}'`).join(", ");
+    await queryDb(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN (${allowedSql}))`);
+};
+const getAdminAccessMatrixPayload = async () => {
+    await ensureAccessMatrixTables();
+    const roles = await queryDb(`SELECT id, name, is_default AS "isDefault" FROM admin_roles ORDER BY created_at ASC, name ASC`);
+    const services = await queryDb(`SELECT id, name FROM admin_services ORDER BY created_at ASC, name ASC`);
+    const cells = await queryDb(`SELECT role_id, service_id, has_access FROM admin_access_matrix`);
+    const matrix = {};
+    for (const role of roles.rows) {
+        matrix[role.id] = {};
+        for (const service of services.rows) {
+            const row = matrix[role.id];
+            if (row) {
+                row[service.id] = false;
+            }
+        }
+    }
+    for (const cell of cells.rows) {
+        const row = matrix[cell.role_id];
+        if (row) {
+            row[cell.service_id] = Boolean(cell.has_access);
+        }
+    }
+    return { roles: roles.rows, services: services.rows, matrix };
+};
 const ensureTables = async () => {
     return loadTables(true);
 };
@@ -236,6 +436,195 @@ app.get("/api/datasets/:key", async (req, res) => {
     }
     catch (error) {
         const message = error instanceof Error ? error.message : "Failed to load data";
+        return res.status(500).json({ error: message });
+    }
+});
+app.get("/api/lead-scoring/weights", async (_req, res) => {
+    try {
+        const rows = await getLeadScoringWeights();
+        return res.json(rows);
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to load lead scoring weights";
+        return res.status(500).json({ error: message });
+    }
+});
+app.get("/api/lead-scoring/kpis", async (_req, res) => {
+    try {
+        const rows = await getAvailableRecommendedOfferKpis();
+        return res.json(rows);
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to load KPI list";
+        return res.status(500).json({ error: message });
+    }
+});
+app.put("/api/lead-scoring/weights", async (req, res) => {
+    try {
+        const payload = req.body;
+        if (!Array.isArray(payload)) {
+            return res.status(400).json({ error: "Expected an array of lead scoring rows" });
+        }
+        const rows = payload;
+        const saved = await saveLeadScoringWeights(rows);
+        return res.json(saved);
+    }
+    catch (error) {
+        const typed = error;
+        const status = typeof typed.status === "number" ? typed.status : 500;
+        const message = error instanceof Error ? error.message : "Failed to save lead scoring weights";
+        return res.status(status).json({ error: message });
+    }
+});
+app.get("/api/admin/access-matrix", async (_req, res) => {
+    try {
+        const payload = await getAdminAccessMatrixPayload();
+        return res.json(payload);
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to load access matrix";
+        return res.status(500).json({ error: message });
+    }
+});
+app.patch("/api/admin/access-matrix", async (req, res) => {
+    const pool = getDbPool();
+    const client = await pool.connect();
+    try {
+        const payload = req.body;
+        if (!payload || !Array.isArray(payload.roles) || !Array.isArray(payload.services) || !payload.matrix) {
+            return res.status(400).json({ error: "Invalid payload. Expected { roles, services, matrix }" });
+        }
+        await ensureAccessMatrixTables();
+        await client.query("BEGIN");
+        await client.query("DELETE FROM admin_access_matrix");
+        await client.query("DELETE FROM admin_roles");
+        await client.query("DELETE FROM admin_services");
+        for (const role of payload.roles) {
+            await client.query(`INSERT INTO admin_roles (id, name, is_default) VALUES ($1, $2, $3)`, [role.id, role.name, Boolean(role.isDefault)]);
+        }
+        for (const service of payload.services) {
+            await client.query(`INSERT INTO admin_services (id, name) VALUES ($1, $2)`, [service.id, service.name]);
+        }
+        for (const role of payload.roles) {
+            for (const service of payload.services) {
+                const hasAccess = Boolean(payload.matrix?.[role.id]?.[service.id]);
+                await client.query(`INSERT INTO admin_access_matrix (role_id, service_id, has_access) VALUES ($1, $2, $3)`, [role.id, service.id, hasAccess]);
+            }
+        }
+        await client.query("COMMIT");
+        for (const service of payload.services) {
+            await mirrorServiceToCoreTable(service);
+        }
+        await syncUsersRoleConstraint();
+        const out = await getAdminAccessMatrixPayload();
+        return res.json(out);
+    }
+    catch (error) {
+        await client.query("ROLLBACK");
+        const message = error instanceof Error ? error.message : "Failed to save access matrix";
+        return res.status(500).json({ error: message });
+    }
+    finally {
+        client.release();
+    }
+});
+app.post("/api/admin/roles", async (req, res) => {
+    try {
+        await ensureAccessMatrixTables();
+        const name = String(req.body?.name ?? "").trim();
+        if (!name) {
+            return res.status(400).json({ error: "Missing role name" });
+        }
+        const role = {
+            id: createEntityId(name),
+            name,
+            isDefault: false,
+        };
+        await queryDb(`INSERT INTO admin_roles (id, name, is_default) VALUES ($1, $2, false)`, [role.id, role.name]);
+        const services = await queryDb("SELECT id, name FROM admin_services");
+        for (const service of services.rows) {
+            await queryDb(`INSERT INTO admin_access_matrix (role_id, service_id, has_access) VALUES ($1, $2, false)`, [role.id, service.id]);
+        }
+        await syncUsersRoleConstraint();
+        return res.status(201).json(role);
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to create role";
+        return res.status(500).json({ error: message });
+    }
+});
+app.delete("/api/admin/roles/:id", async (req, res) => {
+    try {
+        await ensureAccessMatrixTables();
+        const id = String(req.params.id ?? "").trim();
+        if (!id) {
+            return res.status(400).json({ error: "Missing role id" });
+        }
+        const roleRes = await queryDb(`SELECT id, name, is_default AS "isDefault" FROM admin_roles WHERE id=$1`, [id]);
+        const role = roleRes.rows[0];
+        if (!role)
+            return res.status(404).json({ error: "Role not found" });
+        if (role.isDefault)
+            return res.status(400).json({ error: "Default roles cannot be deleted" });
+        await queryDb(`DELETE FROM admin_roles WHERE id=$1`, [id]);
+        await syncUsersRoleConstraint();
+        return res.status(204).send();
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to delete role";
+        return res.status(500).json({ error: message });
+    }
+});
+app.post("/api/admin/services", async (req, res) => {
+    try {
+        await ensureAccessMatrixTables();
+        const name = String(req.body?.name ?? "").trim();
+        if (!name) {
+            return res.status(400).json({ error: "Missing service name" });
+        }
+        const service = {
+            id: createEntityId(name),
+            name,
+        };
+        await queryDb(`INSERT INTO admin_services (id, name) VALUES ($1, $2)`, [service.id, service.name]);
+        const roles = await queryDb("SELECT id, name, is_default AS \"isDefault\" FROM admin_roles");
+        for (const role of roles.rows) {
+            await queryDb(`INSERT INTO admin_access_matrix (role_id, service_id, has_access) VALUES ($1, $2, false)`, [role.id, service.id]);
+        }
+        await mirrorServiceToCoreTable(service);
+        return res.status(201).json(service);
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to create service";
+        return res.status(500).json({ error: message });
+    }
+});
+app.delete("/api/admin/services/:id", async (req, res) => {
+    try {
+        await ensureAccessMatrixTables();
+        const id = String(req.params.id ?? "").trim();
+        if (!id) {
+            return res.status(400).json({ error: "Missing service id" });
+        }
+        const serviceRes = await queryDb(`SELECT id, name FROM admin_services WHERE id=$1`, [id]);
+        const service = serviceRes.rows[0];
+        if (!service)
+            return res.status(404).json({ error: "Service not found" });
+        await queryDb(`DELETE FROM admin_services WHERE id=$1`, [id]);
+        // Best effort mirror cleanup from the core service table.
+        try {
+            await queryDb(`DELETE FROM service WHERE service_id=$1 OR service_name=$2 OR service=$2 OR name=$2`, [
+                service.id.toUpperCase(),
+                service.name,
+            ]);
+        }
+        catch {
+            // ignore if core table columns differ
+        }
+        return res.status(204).send();
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to delete service";
         return res.status(500).json({ error: message });
     }
 });

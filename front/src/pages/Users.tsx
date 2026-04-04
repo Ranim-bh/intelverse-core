@@ -3,7 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { Sparkles, Loader2, Search, X, RefreshCw, FileDown, CheckCircle2, Send, Pencil, Eye } from "lucide-react";
 import { useAppData } from "@/lib/db-client";
 import { getScoreBgColor } from "@/lib/scoring";
-import { Guest, UserRole, UserSource } from "@/lib/types";
+import { Guest, UserSource } from "@/lib/types";
+import { ACCESS_CONTROL_STORAGE_KEY, ACCESS_CONTROL_UPDATED_EVENT, loadAccessControlState } from "@/lib/access-control";
 import { toast } from "sonner";
 
 type ServicePackItem = {
@@ -117,10 +118,15 @@ const priorityToMatchScore: Record<"LOW" | "MEDIUM" | "HIGH", string> = {
   HIGH: "92%",
 };
 
-const roleBadgeClasses: Record<UserRole, string> = {
+const roleBadgeClasses: Record<string, string> = {
   Guest: "bg-slate-100 text-slate-700 border-slate-200",
   Client: "bg-blue-100 text-blue-700 border-blue-200",
   Partner: "bg-purple-100 text-purple-700 border-purple-200",
+  Partenaire: "bg-purple-100 text-purple-700 border-purple-200",
+};
+
+const getRoleBadgeClass = (role: string) => {
+  return roleBadgeClasses[role] ?? "bg-violet-100 text-violet-700 border-violet-200";
 };
 
 const sourceBadgeClasses: Record<UserSource, string> = {
@@ -610,6 +616,9 @@ export default function Users() {
   const [search, setSearch] = useState("");
   const [filterRole, setFilterRole] = useState<string>("all");
   const [filterSource, setFilterSource] = useState<"all" | UserSource>("all");
+  const [roleFilters, setRoleFilters] = useState<string[]>(() =>
+    loadAccessControlState().roles.map((role) => role.name)
+  );
 
   const [generatingIds, setGeneratingIds] = useState<Set<string>>(new Set());
   const [errorIds, setErrorIds] = useState<Record<string, string>>({});
@@ -756,6 +765,33 @@ export default function Users() {
     void loadSavedOffers();
   }, []);
 
+  useEffect(() => {
+    const applyRolesFromConfig = () => {
+      const names = loadAccessControlState().roles
+        .map((role) => role.name.trim())
+        .filter(Boolean);
+
+      setRoleFilters(names.length ? names : ["Guest", "Client", "Partner"]);
+    };
+
+    applyRolesFromConfig();
+
+    const onConfigUpdated = () => applyRolesFromConfig();
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key === ACCESS_CONTROL_STORAGE_KEY) {
+        applyRolesFromConfig();
+      }
+    };
+
+    window.addEventListener(ACCESS_CONTROL_UPDATED_EVENT, onConfigUpdated);
+    window.addEventListener("storage", onStorage);
+
+    return () => {
+      window.removeEventListener(ACCESS_CONTROL_UPDATED_EVENT, onConfigUpdated);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
+
   if (loading) {
     return <div className="text-sm text-muted-foreground">Loading data...</div>;
   }
@@ -788,7 +824,7 @@ export default function Users() {
         <div className="flex flex-wrap gap-3">
           <div className="flex gap-2">
             <span className="text-xs font-semibold text-muted-foreground uppercase pt-2">Role:</span>
-            {["all", "Guest", "Client", "Partner"].map((role) => (
+            {["all", ...roleFilters].map((role) => (
               <button
                 key={role}
                 onClick={() => setFilterRole(role)}
@@ -876,7 +912,7 @@ export default function Users() {
                       <td className="p-4 font-mono text-xs text-muted-foreground">{guest.id}</td>
                       <td className="p-4 font-medium text-foreground">{guest.name}</td>
                       <td className="p-4">
-                        <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${roleBadgeClasses[guest.role]}`}>
+                        <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${getRoleBadgeClass(guest.role)}`}>
                           {guest.role}
                         </span>
                       </td>

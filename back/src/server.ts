@@ -238,6 +238,51 @@ const mirrorServiceToCoreTable = async (service: AccessService): Promise<void> =
   }
 };
 
+const removeServiceFromCoreTable = async (service: AccessService): Promise<void> => {
+  const tableExists = await queryDb<{ exists: boolean }>(
+    `
+    SELECT EXISTS(
+      SELECT 1 FROM information_schema.tables
+      WHERE table_schema='public' AND table_name='service'
+    ) AS exists
+  `
+  );
+
+  if (!tableExists.rows[0]?.exists) {
+    return;
+  }
+
+  const columns = await getTableColumns("service");
+  const predicates: string[] = [];
+  const values: unknown[] = [];
+
+  if (columns.has("service_id")) {
+    values.push(service.id.toUpperCase());
+    predicates.push(`service_id=$${values.length}`);
+  }
+
+  if (columns.has("service_name")) {
+    values.push(service.name);
+    predicates.push(`service_name=$${values.length}`);
+  }
+
+  if (columns.has("service")) {
+    values.push(service.name);
+    predicates.push(`service=$${values.length}`);
+  }
+
+  if (columns.has("name")) {
+    values.push(service.name);
+    predicates.push(`name=$${values.length}`);
+  }
+
+  if (!predicates.length) {
+    return;
+  }
+
+  await queryDb(`DELETE FROM service WHERE ${predicates.join(" OR ")}`, values);
+};
+
 const syncUsersRoleConstraint = async (): Promise<void> => {
   const tableExists = await queryDb<{ exists: boolean }>(
     `
@@ -791,23 +836,28 @@ app.post("/api/admin/services", async (req, res) => {
 app.delete("/api/admin/services/:id", async (req, res) => {
   try {
     await ensureAccessMatrixTables();
-    const id = String(req.params.id ?? "").trim();
-    if (!id) {
+    const rawIdentifier = String(req.params.id ?? "").trim();
+    if (!rawIdentifier) {
       return res.status(400).json({ error: "Missing service id" });
     }
 
-    const serviceRes = await queryDb<AccessService>(`SELECT id, name FROM admin_services WHERE id=$1`, [id]);
+    const serviceRes = await queryDb<AccessService>(
+      `
+      SELECT id, name
+      FROM admin_services
+      WHERE id=$1 OR LOWER(name)=LOWER($1)
+      LIMIT 1
+    `,
+      [rawIdentifier]
+    );
     const service = serviceRes.rows[0];
     if (!service) return res.status(404).json({ error: "Service not found" });
 
-    await queryDb(`DELETE FROM admin_services WHERE id=$1`, [id]);
+    await queryDb(`DELETE FROM admin_services WHERE id=$1 OR LOWER(name)=LOWER($1)`, [rawIdentifier]);
 
     // Best effort mirror cleanup from the core service table.
     try {
-      await queryDb(`DELETE FROM service WHERE service_id=$1 OR service_name=$2 OR service=$2 OR name=$2`, [
-        service.id.toUpperCase(),
-        service.name,
-      ]);
+      await removeServiceFromCoreTable(service);
     } catch {
       // ignore if core table columns differ
     }

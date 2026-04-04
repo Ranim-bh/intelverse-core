@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { guests, MOCK_GUESTS } from "@/lib/mock-data";
+import { useAppData } from "@/lib/db-client";
 import { analyzeGuest } from "@/lib/scoring";
 import {
   ArrowLeft,
@@ -16,6 +16,8 @@ import {
   ChevronRight,
   Zap,
   RefreshCw,
+  FileDown,
+  CheckCircle2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -31,10 +33,11 @@ import {
   Pie,
 } from "recharts";
 import { motion } from "motion/react";
-import type { AIOffer, Guest } from "@/lib/types";
+import type { Guest } from "@/lib/types";
 import { getOfferStatusBadgeClasses, getOfferStatusLabel } from "@/lib/offer-status";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
+import type { OfferStatus } from "@/lib/types";
 
 const StatCard = ({ icon: Icon, label, value, subValue, color }: {
   icon: React.ElementType; label: string; value: string | number; subValue?: string; color: string;
@@ -53,8 +56,34 @@ const StatCard = ({ icon: Icon, label, value, subValue, color }: {
   </div>
 );
 
+type RecommendationResponse = {
+  guest_id: string;
+  engagement_score: number;
+  tier: string;
+  score_breakdown?: {
+    guest_score: number;
+    room_score: number;
+    top_room: string;
+    top_room_by_interactions: string;
+  };
+  recommended_pack: {
+    pack_id?: string;
+    pack_code: string;
+    pack_name: string;
+    nb_rooms: number;
+    services: string[];
+    reason: string;
+  };
+};
+
+type StoredOfferRecord = {
+  user_id: string;
+  status: OfferStatus | string;
+  offer_payload: RecommendationResponse;
+};
+
 // Derive extra data from our Guest type
-function deriveGuestData(guest: Guest, existingOffer?: AIOffer) {
+function deriveGuestData(guest: Guest) {
   const analysis = analyzeGuest(guest);
   const navigationBasedVisits = guest.navigation_path.reduce<Record<string, number>>((acc, step) => {
     if (step === "Showcase Room" || step === "Opportunity Room" || step === "Pitch Room" || step === "Training Center") {
@@ -77,12 +106,10 @@ function deriveGuestData(guest: Guest, existingOffer?: AIOffer) {
     ? navigationBasedVisits["Training Center"] || 0
     : guest.room_observation_time["Training Center"] || 0;
 
-  const activityHistory = [
-    { date: "Sem 1", interactions: Math.round(guest.interaction_count * 0.15) },
-    { date: "Sem 2", interactions: Math.round(guest.interaction_count * 0.25) },
-    { date: "Sem 3", interactions: Math.round(guest.interaction_count * 0.35) },
-    { date: "Sem 4", interactions: Math.round(guest.interaction_count * 0.25) },
-  ];
+  const activityHistory = Object.entries(guest.room_click_rate).map(([room, interactions]) => ({
+    date: room,
+    interactions,
+  }));
 
   const aiInsights: string[] = [];
   if (guest.voice_interaction_time > 2) aiInsights.push(`Forte utilisation vocale (${guest.voice_interaction_time} min) — profil orienté networking.`);
@@ -90,30 +117,6 @@ function deriveGuestData(guest: Guest, existingOffer?: AIOffer) {
   if (guest.idle_time > 1) aiInsights.push(`Temps d'inactivité de ${guest.idle_time} min détecté — risque de désengagement.`);
   if (analysis.score > 70) aiInsights.push("Score élevé — candidat prioritaire pour conversion rapide.");
   if (guest.customization_time > 1) aiInsights.push(`Temps de personnalisation de ${guest.customization_time} min — fort intérêt produit.`);
-
-  const generatedOffer = existingOffer
-    ? {
-      status: existingOffer.status,
-      title: existingOffer.title,
-      sessionsIncluded: existingOffer.sessionsIncluded,
-      roomsIncluded: existingOffer.roomsIncluded,
-      reason: existingOffer.reason,
-      confidenceScore: existingOffer.confidenceScore,
-      priorityLevel: analysis.level === "hot" ? "Critical" : analysis.level === "warm" ? "High" : "Normal",
-      recommendedAction: analysis.level === "hot" ? "Envoyer proposition commerciale" : "Planifier démo personnalisée",
-    }
-    : {
-      status: analysis.level === "hot" ? "READY" : analysis.level === "warm" ? "DRAFT" : "PENDING",
-      title: `Pack ${analysis.recommended_room}`,
-      sessionsIncluded: analysis.score > 70 ? 12 : analysis.score >= 40 ? 6 : 3,
-      roomsIncluded: analysis.score > 70
-        ? ["Training Center", "Showcase Room", analysis.recommended_room].filter((v, i, a) => a.indexOf(v) === i)
-        : [analysis.recommended_room],
-      reason: analysis.offer,
-      confidenceScore: Math.min(99, analysis.score + 10),
-      priorityLevel: analysis.level === "hot" ? "Critical" : analysis.level === "warm" ? "High" : "Normal",
-      recommendedAction: analysis.level === "hot" ? "Envoyer proposition commerciale" : "Planifier démo personnalisée",
-    };
 
   return {
     analysis,
@@ -123,26 +126,162 @@ function deriveGuestData(guest: Guest, existingOffer?: AIOffer) {
     trainingVisits,
     activityHistory,
     aiInsights,
-    generatedOffer,
     conversionProbability: Math.min(99, analysis.score + 5),
   };
 }
 
 const canRegenerate = (status: string) =>
-  status === "pending" ||
-  status === "approved" ||
-  status === "rejected" ||
-  status === "READY" ||
-  status === "DRAFT" ||
-  status === "PENDING";
+  status === "en_attente" ||
+  status === "refusée";
 
 export default function GuestDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [adminNote, setAdminNote] = useState("");
+  const [recommendation, setRecommendation] = useState<RecommendationResponse | null>(null);
+  const [recommendationLoading, setRecommendationLoading] = useState(false);
+  const [recommendationError, setRecommendationError] = useState<string | null>(null);
+  const [savingPack, setSavingPack] = useState(false);
+  const [savedPack, setSavedPack] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [offerStatus, setOfferStatus] = useState<OfferStatus>("en_attente");
+  const { data, loading, error } = useAppData();
 
+  const guests = data.guests;
   const guest = guests.find((g) => g.id === id);
-  const guestWithOffer = MOCK_GUESTS.find((g) => g.id === id);
+
+  const loadRecommendation = async (guestId: string) => {
+    setRecommendationLoading(true);
+    setRecommendationError(null);
+    try {
+      const res = await fetch(`/api/recommend/${encodeURIComponent(guestId)}`, { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const message = typeof body?.error === "string" ? body.error : `Recommendation API error ${res.status}`;
+        throw new Error(message);
+      }
+
+      const payload = (body && typeof body === "object" && body.fallback)
+        ? body.fallback as RecommendationResponse
+        : body as RecommendationResponse;
+      setRecommendation(payload);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load recommendation";
+      setRecommendationError(message);
+      setRecommendation(null);
+    } finally {
+      setRecommendationLoading(false);
+    }
+  };
+
+  const normalizeOfferStatus = (value: unknown): OfferStatus => {
+    const raw = String(value ?? "").trim().toLowerCase();
+    switch (raw) {
+      case "generée":
+      case "generee":
+      case "générée":
+      case "generated":
+        return "generée";
+      case "envoyée":
+      case "envoyee":
+      case "sent":
+        return "envoyée";
+      case "acceptée":
+      case "acceptee":
+      case "accepted":
+        return "acceptée";
+      case "refusée":
+      case "refusee":
+      case "rejected":
+        return "refusée";
+      default:
+        return "en_attente";
+    }
+  };
+
+  const loadSavedOffer = async (guestId: string) => {
+    try {
+      const res = await fetch("/api/recommend/offers");
+      if (!res.ok) {
+        setRecommendation(null);
+        setSavedPack(false);
+        setOfferStatus("en_attente");
+        return;
+      }
+
+      const rows = await res.json() as StoredOfferRecord[];
+      const found = rows.find((row) => {
+        const rowUserId = String(row.user_id ?? "").trim();
+        const payloadGuestId = String(row.offer_payload?.guest_id ?? "").trim();
+        return rowUserId === guestId || payloadGuestId === guestId;
+      });
+
+      if (!found) {
+        setRecommendation(null);
+        setSavedPack(false);
+        setOfferStatus("en_attente");
+        return;
+      }
+
+      const normalizedStatus = normalizeOfferStatus(found.status);
+      setOfferStatus(normalizedStatus);
+
+      // Keep "En attente" aligned with Users: no generated offer should be displayed.
+      if (normalizedStatus === "en_attente") {
+        setRecommendation(null);
+        setSavedPack(false);
+        return;
+      }
+
+      setRecommendation(found.offer_payload);
+      setSavedPack(true);
+    } catch {
+      setRecommendation(null);
+      setSavedPack(false);
+      setOfferStatus("en_attente");
+    }
+  };
+
+  const saveCurrentPack = async () => {
+    if (!id || !recommendation) return;
+    setSavingPack(true);
+    setSaveError(null);
+
+    try {
+      const res = await fetch(`/api/recommend/${encodeURIComponent(id)}/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(recommendation),
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error || `Save API error ${res.status}`);
+      }
+
+      await loadSavedOffer(id);
+      setSavedPack(true);
+      setOfferStatus("generée");
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Failed to save pack");
+    } finally {
+      setSavingPack(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!id) return;
+    void loadSavedOffer(id);
+  }, [id]);
+
+  if (loading) {
+    return <div className="text-sm text-muted-foreground">Chargement des donnees...</div>;
+  }
+
+  if (error) {
+    return <div className="text-sm text-destructive">Erreur donnees: {error}</div>;
+  }
+
   if (!guest) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
@@ -162,9 +301,8 @@ export default function GuestDetail() {
     trainingVisits,
     activityHistory,
     aiInsights,
-    generatedOffer,
     conversionProbability,
-  } = deriveGuestData(guest, guestWithOffer?.generatedOffer);
+  } = deriveGuestData(guest);
 
   const roomData = [
     { name: "Showcase", value: showcaseVisits },
@@ -393,57 +531,112 @@ export default function GuestDetail() {
             </div>
           </div>
 
-          {/* AI Generated Offer — PackageManagement style */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-            <div className="p-6 border-b border-slate-100 bg-slate-50/50">
-              <div className="flex items-center justify-between mb-2">
-                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getOfferStatusBadgeClasses(generatedOffer.status)}`}>
-                  {getOfferStatusLabel(generatedOffer.status)}
+          {/* AI Generated Offer */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden max-w-3xl mx-auto">
+            <div className="p-6 border-b border-slate-200">
+              <div className="flex items-center justify-between mb-3">
+                <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${getOfferStatusBadgeClasses(recommendation ? offerStatus : "en_attente")}`}>
+                  <span className="w-2 h-2 rounded-full bg-current opacity-70" /> {getOfferStatusLabel(recommendation ? offerStatus : "en_attente")}
+                </span>
+                <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-slate-900 text-white border border-slate-900">
+                  Powered by Groq
                 </span>
               </div>
-              <h3 className="text-xl font-bold text-slate-900">{generatedOffer.title}</h3>
-              <p className="text-xs text-slate-500 mt-1">For: {guest.name} ({guest.type_client})</p>
+              <h3 className="text-4xl font-bold text-slate-900">
+                {recommendation?.recommended_pack?.pack_name ?? "No generated pack yet"}
+              </h3>
+              <p className="text-sm text-slate-600 mt-1">
+                Tier {recommendation?.tier ?? "-"} · Pack code {recommendation?.recommended_pack?.pack_code ?? "-"}
+              </p>
+              <p className="text-xs text-slate-500 mt-2">User: {guest.name} · Domain: {guest.domain}</p>
             </div>
 
-            <div className="p-6 flex-1 space-y-4">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-slate-500">Sessions</span>
-                <span className="text-sm font-bold text-slate-900">{generatedOffer.sessionsIncluded}</span>
+            <div className="p-6 space-y-6">
+              <div className="border-b border-slate-200 pb-4">
+                <h4 className="text-xs uppercase font-bold text-slate-500 tracking-wide mb-2">Sessions</h4>
+                <p className="text-4xl font-bold text-slate-900">{recommendation?.recommended_pack?.nb_rooms ?? "-"}</p>
               </div>
 
               <div>
-                <p className="text-xs font-bold text-slate-400 uppercase mb-2">Included Rooms</p>
+                <h4 className="text-xs uppercase font-bold text-slate-500 tracking-wide mb-3">Services</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {(recommendation?.recommended_pack?.services ?? []).map((service) => (
+                    <div key={service} className="rounded-xl border border-slate-200 p-4 bg-slate-50">
+                      <p className="font-bold text-slate-900 flex items-center gap-2">✅ {service}</p>
+                      <p className="text-sm text-slate-700 mt-1">Price: $0</p>
+                      <p className="text-xs text-slate-600 mt-2">"{recommendation?.recommended_pack?.reason ?? ""}"</p>
+                    </div>
+                  ))}
+                  {!recommendation?.recommended_pack?.services?.length && (
+                    <div className="rounded-xl border border-slate-200 p-4 bg-slate-50 text-sm text-slate-500">
+                      No services available.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <h4 className="text-xs uppercase font-bold text-slate-500 tracking-wide mb-3">KPIs Improved</h4>
                 <div className="flex flex-wrap gap-2">
-                  {generatedOffer.roomsIncluded.map((room, idx) => (
-                    <span key={idx} className="px-2 py-1 bg-red-50 text-red-700 rounded text-[10px] font-medium">
-                      {room}
+                  {(recommendation?.score_breakdown?.top_room ? [recommendation.score_breakdown.top_room, recommendation.score_breakdown.top_room_by_interactions] : [])
+                    .filter((kpi, idx, arr) => arr.indexOf(kpi) === idx)
+                    .map((kpi, idx) => (
+                    <span key={`${kpi}-${idx}`} className="px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                      {kpi}
                     </span>
                   ))}
                 </div>
               </div>
 
-              <div className="p-3 bg-red-50 rounded-lg border border-red-100">
-                <p className="text-[10px] font-bold text-red-500 uppercase mb-1">AI Reason</p>
-                <p className="text-xs text-red-800 italic">"{generatedOffer.reason}"</p>
+              <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+                <p className="text-xs uppercase font-bold text-red-500 tracking-wide mb-1">Reason of Choice</p>
+                <p className="text-sm text-red-900 italic">
+                  "{recommendation?.recommended_pack?.reason ?? "Recommendation not available yet."}"
+                </p>
               </div>
-            </div>
 
-            <div className="p-6 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
-              <div>
-                <p className="text-[10px] font-bold text-slate-400 uppercase">Confidence</p>
-                <p className="text-lg font-black text-slate-900">{generatedOffer.confidenceScore}%</p>
+              <div className="border-y border-slate-200 py-4 flex items-center justify-between">
+                <p className="text-sm uppercase tracking-wider font-bold text-slate-500">Total Price</p>
+                <p className="text-2xl font-black text-slate-900">$0</p>
               </div>
-              <div className="flex items-center gap-2">
-                {canRegenerate(String(generatedOffer.status)) && (
-                  <button className="flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 text-indigo-600 border border-indigo-200 rounded-lg text-[10px] font-bold hover:bg-indigo-100 transition-colors">
-                    <RefreshCw size={12} />
-                    Regenerate
+
+              {recommendationError ? <p className="text-xs text-destructive">Recommendation error: {recommendationError}</p> : null}
+              {saveError ? <p className="text-xs text-destructive">Save error: {saveError}</p> : null}
+
+              <div className="flex flex-wrap gap-2 justify-end">
+                {canRegenerate(recommendation ? offerStatus : "en_attente") && (
+                  <button
+                    onClick={() => {
+                      if (id) {
+                        setSavedPack(false);
+                        setOfferStatus("en_attente");
+                        void loadRecommendation(id);
+                      }
+                    }}
+                    disabled={recommendationLoading}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60"
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                    {recommendationLoading ? "Loading..." : recommendation ? "Regenerate" : "Generate Offer"}
                   </button>
                 )}
-                <button className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-700 hover:bg-slate-50 transition-colors">
-                  Review Offer
+                <button
+                  onClick={() => window.print()}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-700 text-sm font-semibold hover:bg-slate-50"
+                >
+                  <FileDown className="h-4 w-4" /> Download PDF
+                </button>
+                <button
+                  onClick={() => void saveCurrentPack()}
+                  disabled={savedPack || savingPack || !recommendation}
+                  className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold ${
+                    savedPack ? "bg-emerald-100 text-emerald-700" : "bg-emerald-600 text-white hover:bg-emerald-700"
+                  } disabled:opacity-70`}
+                >
+                  <CheckCircle2 className="h-4 w-4" /> {savedPack ? "Saved" : savingPack ? "Saving..." : "Save Pack"}
                 </button>
               </div>
+              {savedPack ? <p className="text-sm text-emerald-700 font-medium text-right">Pack successfully saved</p> : null}
             </div>
           </div>
         </div>

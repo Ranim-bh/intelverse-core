@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bell, User, Lock, SlidersHorizontal, Plus, Trash2, Edit } from "lucide-react";
+import { Bell, User, Lock, SlidersHorizontal, Plus, Trash2, Edit, Mail, MessageCircle, CalendarDays, ExternalLink } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
 import {
   Dialog,
@@ -10,9 +10,10 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { loadAccessControlState, saveAccessControlState } from "@/lib/access-control";
 
-type SettingsSection = "profile" | "notifications" | "roles" | "lead-scoring";
+type SettingsSection = "profile" | "notifications" | "instruction" | "roles" | "lead-scoring";
 
 type Service = string;
 type Role = {
@@ -53,6 +54,20 @@ type Criterion = {
   weight: number;
 };
 
+type LeadScoringKpiOption = {
+  kpi_key: string;
+  label: string;
+  category: string;
+};
+
+type LeadScoringWeightRow = {
+  kpi_key: string;
+  label: string;
+  category: string;
+  weight: number;
+  is_default?: boolean;
+};
+
 const defaultRoleServiceAccess: RoleServiceAccess = {
   guest: {
     "Showcase Room": true,
@@ -89,6 +104,47 @@ const defaultLeadScoringWeights: LeadScoringWeights = {
   idleTime: 0,
 };
 
+const instructionStorageKey = "intelverse:instruction-settings";
+
+const defaultInstructionSettings: InstructionSettings = {
+  presentation:
+    "TalentVerse est une plateforme digitale innovante qui se positionne comme un écosystème tout-en-un connectant l'acquisition de compétences, leur preuve vérifiable, le matching avec des opportunités d'emploi et l'engagement communautaire. Elle s'adresse à un marché multi-face couvrant les talents individuels, les entreprises, les établissements de formation et les institutions publiques ou partenaires du développement.",
+  rules: [
+    "Merci de vous connecter 10 minutes avant la session.",
+    "Tout comportement irrespectueux entraîne l'exclusion immédiate.",
+  ],
+  supportEmail: "support@talentverse.io",
+  chatbotLink: "https://chat.talentverse.io/support",
+  calendarLink: "https://calendly.com/talentverse/session-decouverte",
+  downloadLink: "https://talentverse.io/download",
+  epicAccountLink:
+    "https://www.epicgames.com/help/account-c-202300000001645/account-services-c-202300000001752/how-to-create-an-epic-games-account-a202300000018101",
+  days: ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"],
+  fromHour: "12h00",
+  toHour: "18h00",
+};
+
+const loadInstructionSettings = (): InstructionSettings => {
+  if (typeof window === "undefined") return defaultInstructionSettings;
+
+  try {
+    const raw = window.localStorage.getItem(instructionStorageKey);
+    if (!raw) return defaultInstructionSettings;
+
+    const parsed = JSON.parse(raw) as Partial<InstructionSettings>;
+    return {
+      ...defaultInstructionSettings,
+      ...parsed,
+      rules: Array.isArray(parsed.rules) && parsed.rules.length
+        ? parsed.rules.map((rule) => String(rule)).filter((rule) => rule.trim().length > 0)
+        : defaultInstructionSettings.rules,
+      days: Array.isArray(parsed.days) && parsed.days.length ? parsed.days : defaultInstructionSettings.days,
+    };
+  } catch {
+    return defaultInstructionSettings;
+  }
+};
+
 const initialAccessControl = loadAccessControlState();
 
 const defaultCriteria: Criterion[] = [
@@ -115,6 +171,48 @@ type NotificationState = {
   criticalAntiChurnSignal: boolean;
   weeklyPerformanceReport: boolean;
   upsellingOpportunityDetected: boolean;
+};
+
+type InstructionSettings = {
+  presentation: string;
+  rules: string[];
+  supportEmail: string;
+  chatbotLink: string;
+  calendarLink: string;
+  downloadLink: string;
+  epicAccountLink: string;
+  days: string[];
+  fromHour: string;
+  toHour: string;
+};
+type GuestInstructionApiPayload = {
+  presentation: string;
+  available_days: string[];
+  start_time: string;
+  end_time: string;
+  calendar_link: string;
+  steps: Array<{ step: number; title: string; description: string }>;
+  rules: Array<{ position: number; rule: string }>;
+  services: string[];
+  support_email: string;
+  chatbot_link: string;
+};
+const toHourLabel = (value: string): string => {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return "";
+  if (normalized.includes("h")) return normalized;
+  const [hours, minutes = "00"] = normalized.split(":");
+  const hh = String(hours).padStart(2, "0");
+  const mm = String(minutes).padStart(2, "0").slice(0, 2);
+  return `${hh}h${mm}`;
+};
+
+const toApiTime = (value: string): string => {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return "";
+  if (normalized.includes(":")) return normalized;
+  const [hours, minutes = "00"] = normalized.split("h");
+  return `${String(hours).padStart(2, "0")}:${String(minutes || "00").padStart(2, "0")}`;
 };
 
 type RolePermission = {
@@ -205,9 +303,14 @@ export default function Settings() {
   const [newRoleName, setNewRoleName] = useState<string>("");
   const [isAddRoleModalOpen, setIsAddRoleModalOpen] = useState<boolean>(false);
   const [isAddServiceModalOpen, setIsAddServiceModalOpen] = useState<boolean>(false);
-  const [editingCriterionId, setEditingCriterionId] = useState<string | null>(null);
-  const [editingCriterionName, setEditingCriterionName] = useState<string>("");
   const [criteria, setCriteria] = useState<Criterion[]>(defaultCriteria);
+  const [availableKpis, setAvailableKpis] = useState<LeadScoringKpiOption[]>([]);
+  const [selectedKpiToAdd, setSelectedKpiToAdd] = useState<string>("");
+  const [isLoadingKpis, setIsLoadingKpis] = useState<boolean>(false);
+  const [hasLoadedLeadScoringFromApi, setHasLoadedLeadScoringFromApi] = useState<boolean>(false);
+  const [instructionSettings, setInstructionSettings] = useState<InstructionSettings>(loadInstructionSettings());
+  const [instructionSaved, setInstructionSaved] = useState<boolean>(false);
+  const [newInstructionRule, setNewInstructionRule] = useState<string>("");
   const [profileForm, setProfileForm] = useState<ProfileFormState>({
     fullName: "Admin TalentVerse",
     jobTitle: "Platform Manager",
@@ -236,6 +339,10 @@ export default function Settings() {
   }, [profileForm.fullName]);
 
   const passwordStrength = useMemo(() => getPasswordStrength(profileForm.newPassword), [profileForm.newPassword]);
+
+  useEffect(() => {
+    window.localStorage.setItem(instructionStorageKey, JSON.stringify(instructionSettings));
+  }, [instructionSettings]);
 
   const toFallbackServiceId = (serviceName: string) =>
     serviceName
@@ -330,6 +437,49 @@ export default function Settings() {
 
   useEffect(() => {
     void hydrateAccessFromApi();
+  }, []);
+
+  const hydrateLeadScoringFromApi = async () => {
+    setIsLoadingKpis(true);
+    try {
+      const [kpisRes, weightsRes] = await Promise.all([
+        fetch("/api/lead-scoring/kpis"),
+        fetch("/api/lead-scoring/weights"),
+      ]);
+
+      let fetchedKpis: LeadScoringKpiOption[] = [];
+      if (kpisRes.ok) {
+        const kpisPayload = (await kpisRes.json()) as LeadScoringKpiOption[];
+        fetchedKpis = Array.isArray(kpisPayload)
+          ? kpisPayload.filter((row) => Boolean(row?.kpi_key && row?.label))
+          : [];
+      }
+
+      setAvailableKpis(fetchedKpis);
+      setSelectedKpiToAdd((current) => current || fetchedKpis[0]?.kpi_key || "");
+
+      if (weightsRes.ok) {
+        const weightsPayload = (await weightsRes.json()) as LeadScoringWeightRow[];
+        if (Array.isArray(weightsPayload) && weightsPayload.length) {
+          setCriteria(
+            weightsPayload.map((row) => ({
+              id: row.kpi_key,
+              name: row.label,
+              weight: Number(row.weight) || 0,
+            }))
+          );
+        }
+      }
+    } catch {
+      // Keep local fallback criteria if backend is unavailable.
+    } finally {
+      setHasLoadedLeadScoringFromApi(true);
+      setIsLoadingKpis(false);
+    }
+  };
+
+  useEffect(() => {
+    void hydrateLeadScoringFromApi();
   }, []);
 
   useEffect(() => {
@@ -541,21 +691,31 @@ export default function Settings() {
     setCriteria((prev) => {
       const currentTotalExcludingThis = prev.reduce((sum, c) => c.id !== id ? sum + c.weight : sum, 0);
       const maxAllowed = 100 - currentTotalExcludingThis;
-      const finalValue = Math.min(safeValue, maxAllowed);
+      const finalValue = Math.max(0, Math.min(safeValue, maxAllowed));
       return prev.map((c) => (c.id === id ? { ...c, weight: finalValue } : c));
     });
   };
 
-  const updateCriterionName = (id: string, name: string) => {
-    setCriteria((prev) => prev.map((c) => (c.id === id ? { ...c, name } : c)));
-  };
-
   const addCriterion = () => {
-    const newId = `criterion-${Date.now()}`;
-    setCriteria((prev) => [...prev, { id: newId, name: "New Criterion", weight: 0 }]);
+    if (!selectedKpiToAdd) return;
+
+    const selectedKpi = availableKpis.find((kpi) => kpi.kpi_key === selectedKpiToAdd);
+    if (!selectedKpi) return;
+
+    if (criteria.some((criterion) => criterion.id === selectedKpi.kpi_key)) {
+      toast.error("Criterion already added", { duration: 2200, position: "bottom-right" });
+      return;
+    }
+
+    setCriteria((prev) => [...prev, { id: selectedKpi.kpi_key, name: selectedKpi.label, weight: 0 }]);
+    toast.success("Criterion added", { duration: 1800, position: "bottom-right" });
   };
 
   const deleteCriterion = (id: string) => {
+    if (criteria.length <= 3) {
+      toast.error("At least 3 criteria are required", { duration: 2500, position: "bottom-right" });
+      return;
+    }
     setCriteria((prev) => prev.filter((c) => c.id !== id));
   };
 
@@ -565,16 +725,191 @@ export default function Settings() {
 
   const totalWeight = useMemo(() => criteria.reduce((sum, c) => sum + c.weight, 0), [criteria]);
 
-  const saveLeadScoring = () => {
-    toast.success("Lead scoring updated", { duration: 2000, position: "bottom-right" });
+  const persistLeadScoring = async (silent = false) => {
+    const computedTotal = criteria.reduce((sum, row) => sum + Number(row.weight || 0), 0);
+    if (computedTotal > 100) {
+      if (!silent) {
+        toast.error("Total weight cannot exceed 100%", { duration: 2600, position: "bottom-right" });
+      }
+      return;
+    }
+
+    try {
+      const payload: LeadScoringWeightRow[] = criteria.map((criterion) => {
+        const kpiMeta = availableKpis.find((kpi) => kpi.kpi_key === criterion.id);
+        return {
+          kpi_key: criterion.id,
+          label: criterion.name,
+          category: kpiMeta?.category ?? "Custom",
+          weight: Math.max(0, Math.min(100, Number(criterion.weight) || 0)),
+          is_default: defaultCriteria.some((item) => item.id === criterion.id),
+        };
+      });
+
+      const res = await fetch("/api/lead-scoring/weights", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errorPayload = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(errorPayload.error || "Unable to save lead scoring settings");
+      }
+
+      if (!silent) {
+        toast.success("Lead scoring updated", { duration: 2000, position: "bottom-right" });
+      }
+    } catch (error) {
+      if (!silent) {
+        const message = error instanceof Error ? error.message : "Unable to save lead scoring";
+        toast.error(message, { duration: 3000, position: "bottom-right" });
+      }
+    }
   };
 
-  const profileNavItems: Array<{ id: SettingsSection; label: string; icon: typeof User | typeof Lock | typeof SlidersHorizontal }> = [
+  const saveLeadScoring = async () => {
+    await persistLeadScoring(false);
+  };
+
+  useEffect(() => {
+    if (!hasLoadedLeadScoringFromApi) {
+      return;
+    }
+
+    const timerId = window.setTimeout(() => {
+      void persistLeadScoring(true);
+    }, 450);
+
+    return () => window.clearTimeout(timerId);
+  }, [criteria, hasLoadedLeadScoringFromApi, availableKpis]);
+
+  const profileNavItems: Array<{ id: SettingsSection; label: string; icon: typeof User | typeof Lock | typeof SlidersHorizontal | typeof Bell | typeof MessageCircle }> = [
     { id: "profile", label: "Admin Profile", icon: User },
     { id: "notifications", label: "Notifications", icon: Bell },
+    { id: "instruction", label: "Fiche d'instruction", icon: MessageCircle },
     { id: "lead-scoring", label: "Lead Scoring", icon: SlidersHorizontal },
     { id: "roles", label: "Roles & Access", icon: Lock },
   ];
+
+  const toggleInstructionDay = (day: string) => {
+    setInstructionSettings((prev) => ({
+      ...prev,
+      days: prev.days.includes(day) ? prev.days.filter((item) => item !== day) : [...prev.days, day],
+    }));
+  };
+
+  const updateInstructionRule = (index: number, value: string) => {
+    setInstructionSettings((prev) => ({
+      ...prev,
+      rules: prev.rules.map((rule, ruleIndex) => (ruleIndex === index ? value : rule)),
+    }));
+  };
+
+  const removeInstructionRule = (index: number) => {
+    setInstructionSettings((prev) => ({
+      ...prev,
+      rules: prev.rules.filter((_, ruleIndex) => ruleIndex !== index),
+    }));
+  };
+
+  const addInstructionRule = () => {
+    const nextRule = newInstructionRule.trim();
+    if (!nextRule) return;
+
+    setInstructionSettings((prev) => ({
+      ...prev,
+      rules: [...prev.rules, nextRule],
+    }));
+    setNewInstructionRule("");
+  };
+
+  const resetInstructionSheet = () => {
+    setInstructionSettings(defaultInstructionSettings);
+    setNewInstructionRule("");
+  };
+
+  const saveInstructionSheet = () => {
+    const execute = async () => {
+      const steps = [
+        { step: 1, title: "Créer un compte Epic Games", description: "Guide Epic Games" },
+        { step: 2, title: "Télécharger TalentVerse", description: instructionSettings.downloadLink },
+        { step: 3, title: "S'inscrire et choisir un avatar", description: "Créer son profil, sélectionner un avatar et personnaliser son apparence." },
+        { step: 4, title: "Cliquer sur \"Rejoindre la session\"", description: "L'invité rejoint directement la session et est prêt à participer." },
+      ];
+
+      const payload: Omit<GuestInstructionApiPayload, "services"> = {
+        presentation: instructionSettings.presentation,
+        available_days: instructionSettings.days,
+        start_time: toApiTime(instructionSettings.fromHour),
+        end_time: toApiTime(instructionSettings.toHour),
+        calendar_link: instructionSettings.calendarLink,
+        steps,
+        rules: instructionSettings.rules
+          .map((rule, index) => ({ position: index + 1, rule: String(rule).trim() }))
+          .filter((row) => row.rule.length > 0),
+        support_email: instructionSettings.supportEmail,
+        chatbot_link: instructionSettings.chatbotLink,
+      };
+
+      const res = await fetch("/api/guest-instruction", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error || `Unable to save instruction settings (${res.status})`);
+      }
+
+      setInstructionSaved(true);
+      toast.success("Instruction sheet saved", { duration: 2000, position: "bottom-right" });
+      window.setTimeout(() => setInstructionSaved(false), 1800);
+    };
+
+    void execute().catch((error) => {
+      const message = error instanceof Error ? error.message : "Unable to save instruction settings";
+      toast.error(message, { duration: 2600, position: "bottom-right" });
+    });
+  };
+
+  const hydrateInstructionFromApi = async () => {
+    try {
+      const res = await fetch("/api/guest-instruction");
+      if (!res.ok) return;
+
+      const payload = (await res.json()) as GuestInstructionApiPayload;
+      if (!payload || typeof payload !== "object") return;
+
+      const rules = Array.isArray(payload.rules)
+        ? payload.rules
+            .sort((a, b) => Number(a.position || 0) - Number(b.position || 0))
+            .map((row) => String(row.rule ?? "").trim())
+            .filter(Boolean)
+        : [];
+
+      setInstructionSettings((prev) => ({
+        ...prev,
+        presentation: String(payload.presentation ?? "").trim() || prev.presentation,
+        rules: rules.length ? rules : prev.rules,
+        supportEmail: String(payload.support_email ?? "").trim() || prev.supportEmail,
+        chatbotLink: String(payload.chatbot_link ?? "").trim() || prev.chatbotLink,
+        calendarLink: String(payload.calendar_link ?? "").trim() || prev.calendarLink,
+        days: Array.isArray(payload.available_days) && payload.available_days.length
+          ? payload.available_days.map((day) => String(day))
+          : prev.days,
+        fromHour: toHourLabel(String(payload.start_time ?? "")) || prev.fromHour,
+        toHour: toHourLabel(String(payload.end_time ?? "")) || prev.toHour,
+      }));
+    } catch {
+      // fallback to local/default state when backend data is unavailable
+    }
+  };
+
+  useEffect(() => {
+    void hydrateInstructionFromApi();
+  }, []);
 
   return (
     <div className="min-h-[calc(100vh-7.5rem)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -996,6 +1331,365 @@ export default function Settings() {
                 </div>
               </div>
             </div>
+          ) : activeSection === "instruction" ? (
+            <div className="mx-auto max-w-5xl pb-8">
+              <div className="mb-6 flex items-center gap-3 text-sm text-slate-500">
+                <span>Paramètres</span>
+                <span>›</span>
+                <span className="font-medium text-slate-900">Fiche d'instruction invité</span>
+              </div>
+
+              <div className="mb-6">
+                <h1 className="text-2xl font-bold text-slate-900">Fiche d&apos;instruction</h1>
+                <p className="text-sm text-slate-500">
+                  Contenu envoyé aux invités par email - présentation, règles, disponibilité, étapes d&apos;accès et support.
+                </p>
+              </div>
+
+              <div className="space-y-5">
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-5 py-3.5">
+                    <h3 className="text-sm font-semibold text-slate-900">Présentation de TalentVerse</h3>
+                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700">
+                      Modifiable
+                    </span>
+                  </div>
+                  <div className="p-5">
+                    <label className="mb-2 block text-sm font-medium text-slate-700">Description affichée dans l&apos;email invité</label>
+                    <Textarea
+                      value={instructionSettings.presentation}
+                      onChange={(event) =>
+                        setInstructionSettings((prev) => ({
+                          ...prev,
+                          presentation: event.target.value,
+                        }))
+                      }
+                      className="min-h-[140px] rounded-xl border-slate-200 bg-white text-sm leading-6 text-slate-800 focus-visible:ring-indigo-500"
+                    />
+                    <div className="mt-2 text-right text-xs text-slate-400">{instructionSettings.presentation.length} caractères</div>
+
+                    <div className="mt-5 border-t border-slate-200 pt-5">
+                      <div className="mb-1 flex items-center gap-2">
+                        <label className="text-sm font-medium text-slate-700">Services accessibles (invité)</label>
+                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-500">
+                          Automatique · base de données
+                        </span>
+                      </div>
+                      <p className="mb-3 text-xs text-slate-500">
+                        Ces services sont définis automatiquement depuis la base de données selon le rôle guest. Ils ne peuvent pas être modifiés manuellement ici.
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                          "Explorer les compétences",
+                          "Rejoindre une session publique",
+                          "Consulter les profils talents",
+                          "Accès à la démo XR",
+                          "Chat communautaire",
+                          "Voir les offres d'emploi",
+                        ].map((service) => (
+                          <span
+                            key={service}
+                            className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700"
+                          >
+                            {service}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-5 py-3.5">
+                    <h3 className="text-sm font-semibold text-slate-900">Disponibilités &amp; calendrier</h3>
+                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700">
+                      Modifiable
+                    </span>
+                  </div>
+                  <div className="p-5">
+                    <label className="mb-2 block text-sm font-medium text-slate-700">Jours disponibles</label>
+                    <div className="flex flex-wrap gap-2">
+                      {defaultInstructionSettings.days.map((day) => {
+                        const active = instructionSettings.days.includes(day);
+                        return (
+                          <button
+                            key={day}
+                            type="button"
+                            onClick={() => toggleInstructionDay(day)}
+                            className={`rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
+                              active
+                                ? "border-indigo-200 bg-indigo-50 text-indigo-700"
+                                : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
+                            }`}
+                          >
+                            {day}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="mt-5 grid gap-4 md:grid-cols-2">
+                      <div>
+                        <label className="mb-2 block text-sm font-medium text-slate-700">Heure de début</label>
+                        <select
+                          value={instructionSettings.fromHour}
+                          onChange={(event) =>
+                            setInstructionSettings((prev) => ({
+                              ...prev,
+                              fromHour: event.target.value,
+                            }))
+                          }
+                          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        >
+                          {[
+                            "08h00",
+                            "09h00",
+                            "10h00",
+                            "11h00",
+                            "12h00",
+                            "13h00",
+                            "14h00",
+                            "15h00",
+                          ].map((hour) => (
+                            <option key={hour} value={hour}>{hour}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="mb-2 block text-sm font-medium text-slate-700">Heure de fin</label>
+                        <select
+                          value={instructionSettings.toHour}
+                          onChange={(event) =>
+                            setInstructionSettings((prev) => ({
+                              ...prev,
+                              toHour: event.target.value,
+                            }))
+                          }
+                          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        >
+                          {[
+                            "13h00",
+                            "14h00",
+                            "15h00",
+                            "16h00",
+                            "17h00",
+                            "18h00",
+                            "19h00",
+                            "20h00",
+                          ].map((hour) => (
+                            <option key={hour} value={hour}>{hour}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="mt-5 grid gap-4 md:grid-cols-2">
+                      <div>
+                        <label className="mb-2 block text-sm font-medium text-slate-700">Lien calendrier (Calendly)</label>
+                        <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                          <CalendarDays className="h-4 w-4 shrink-0 text-slate-500" />
+                          <input
+                            type="url"
+                            value={instructionSettings.calendarLink}
+                            onChange={(event) =>
+                              setInstructionSettings((prev) => ({
+                                ...prev,
+                                calendarLink: event.target.value,
+                              }))
+                            }
+                            className="w-full border-0 bg-transparent p-0 text-sm text-slate-700 focus:outline-none focus:ring-0"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-5 py-3.5">
+                    <h3 className="text-sm font-semibold text-slate-900">Étapes pour accéder à TalentVerse</h3>
+                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700">
+                      Modifiable
+                    </span>
+                  </div>
+                  <div className="space-y-3 p-5">
+                    <p className="text-xs text-slate-500">
+                      Ces étapes sont affichées dans l&apos;email envoyé à l&apos;invité pour l&apos;aider à se connecter à la plateforme.
+                    </p>
+
+                    {[1, 2, 3, 4].map((step) => (
+                      <div key={step} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                        {step === 1 ? (
+                          <div className="flex items-start gap-3">
+                            <span className="mt-0.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700">1</span>
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">Créer un compte Epic Games</p>
+                              <a href={instructionSettings.epicAccountLink} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-2 text-sm text-indigo-700 hover:underline">
+                                <ExternalLink className="h-3.5 w-3.5" /> Guide Epic Games
+                              </a>
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {step === 2 ? (
+                          <div className="flex items-start gap-3">
+                            <span className="mt-0.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700">2</span>
+                            <div className="w-full">
+                              <p className="text-sm font-semibold text-slate-900">Télécharger TalentVerse</p>
+                              <div className="mt-2 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+                                <span>⬇</span>
+                                <input
+                                  type="url"
+                                  value={instructionSettings.downloadLink}
+                                  onChange={(event) =>
+                                    setInstructionSettings((prev) => ({
+                                      ...prev,
+                                      downloadLink: event.target.value,
+                                    }))
+                                  }
+                                  className="w-full border-0 bg-transparent p-0 focus:outline-none focus:ring-0"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {step === 3 ? (
+                          <div className="flex items-start gap-3">
+                            <span className="mt-0.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700">3</span>
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">S&apos;inscrire et choisir un avatar</p>
+                              <p className="mt-1 text-sm text-slate-600">Créer son profil, sélectionner un avatar et personnaliser son apparence.</p>
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {step === 4 ? (
+                          <div className="flex items-start gap-3">
+                            <span className="mt-0.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700">4</span>
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">Cliquer sur "Rejoindre la session"</p>
+                              <p className="mt-1 text-sm text-slate-600">L&apos;invité rejoint directement la session et est prêt à participer.</p>
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-5 py-3.5">
+                    <h3 className="text-sm font-semibold text-slate-900">Règles générales</h3>
+                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700">
+                      Modifiable
+                    </span>
+                  </div>
+                  <div className="space-y-3 p-5">
+                    {instructionSettings.rules.map((rule, index) => (
+                      <div key={`rule-${index}`} className="flex items-start gap-2">
+                        <Input
+                          value={rule}
+                          onChange={(event) => updateInstructionRule(index, event.target.value)}
+                          className="h-10"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeInstructionRule(index)}
+                          className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
+                          aria-label="Supprimer une règle"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+
+                    <div className="flex items-center gap-2">
+                      <Input
+                        placeholder="Ajouter une nouvelle règle..."
+                        value={newInstructionRule}
+                        onChange={(event) => setNewInstructionRule(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            addInstructionRule();
+                          }
+                        }}
+                        className="h-10"
+                      />
+                      <Button type="button" variant="outline" onClick={addInstructionRule}>+ Ajouter</Button>
+                    </div>
+
+                    <p className="text-right text-xs text-slate-400">
+                      {instructionSettings.rules.join(" ").length} caractères (total règles)
+                    </p>
+                  </div>
+                </div>
+
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-5 py-3.5">
+                    <h3 className="text-sm font-semibold text-slate-900">Support</h3>
+                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700">
+                      Modifiable
+                    </span>
+                  </div>
+                  <div className="p-5">
+                    <p className="text-sm text-slate-600">
+                      L&apos;invité peut contacter l&apos;équipe support via email ou chatbot depuis l&apos;email reçu.
+                    </p>
+
+                    <div className="mt-4 grid gap-4 md:grid-cols-2">
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                        <p className="mb-1 text-xs text-slate-500">Email support</p>
+                        <a href={`mailto:${instructionSettings.supportEmail}`} className="inline-flex items-center gap-2 text-sm font-medium text-slate-900 hover:underline">
+                          <Mail className="h-4 w-4 text-indigo-600" />
+                          {instructionSettings.supportEmail}
+                        </a>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                        <p className="mb-1 text-xs text-slate-500">Chatbot support</p>
+                        <a href={instructionSettings.chatbotLink} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-sm font-medium text-slate-900 hover:underline">
+                          <MessageCircle className="h-4 w-4 text-indigo-600" />
+                          chat.talentverse.io
+                        </a>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      <div>
+                        <label className="mb-1 block text-xs text-slate-500">Email support</label>
+                        <Input
+                          value={instructionSettings.supportEmail}
+                          onChange={(event) =>
+                            setInstructionSettings((prev) => ({
+                              ...prev,
+                              supportEmail: event.target.value,
+                            }))
+                          }
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs text-slate-500">Lien chatbot</label>
+                        <Input
+                          value={instructionSettings.chatbotLink}
+                          onChange={(event) =>
+                            setInstructionSettings((prev) => ({
+                              ...prev,
+                              chatbotLink: event.target.value,
+                            }))
+                          }
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-5 flex justify-end gap-3">
+                      <Button variant="outline" onClick={resetInstructionSheet}>Annuler</Button>
+                      <Button onClick={saveInstructionSheet}>{instructionSaved ? "Sauvegardé" : "Sauvegarder"}</Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           ) : activeSection === "lead-scoring" ? (
             <div>
               <div className="mb-6">
@@ -1009,49 +1703,40 @@ export default function Settings() {
                     <h3 className="text-base font-bold text-slate-900">Scoring Criteria</h3>
                     <p className="text-sm text-slate-500">Configure the criteria used for lead scoring.</p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={addCriterion}
-                    className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
-                  >
-                    <Plus className="h-4 w-4" />
-                    Add Criterion
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={selectedKpiToAdd}
+                      onChange={(event) => setSelectedKpiToAdd(event.target.value)}
+                      disabled={isLoadingKpis || availableKpis.length === 0}
+                      className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      {availableKpis.length === 0 ? (
+                        <option value="">No KPI available</option>
+                      ) : (
+                        availableKpis.map((kpi) => (
+                          <option key={kpi.kpi_key} value={kpi.kpi_key}>
+                            {kpi.label} ({kpi.category})
+                          </option>
+                        ))
+                      )}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={addCriterion}
+                      disabled={isLoadingKpis || !selectedKpiToAdd || availableKpis.length === 0}
+                      className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Plus className="h-4 w-4" />
+                      Add Criterion
+                    </button>
+                  </div>
                 </div>
 
                 <div className="space-y-4">
                   {criteria.map((criterion) => (
                     <div key={criterion.id} className="flex items-center gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
                       <div className="flex-1">
-                        {editingCriterionId === criterion.id ? (
-                          <Input
-                            value={editingCriterionName}
-                            onChange={(e) => setEditingCriterionName(e.target.value)}
-                            onBlur={() => {
-                              const trimmed = editingCriterionName.trim();
-                              if (trimmed) {
-                                updateCriterionName(criterion.id, trimmed);
-                              }
-                              setEditingCriterionId(null);
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                const trimmed = editingCriterionName.trim();
-                                if (trimmed) {
-                                  updateCriterionName(criterion.id, trimmed);
-                                }
-                                setEditingCriterionId(null);
-                              }
-                              if (e.key === "Escape") {
-                                setEditingCriterionId(null);
-                              }
-                            }}
-                            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                            autoFocus
-                          />
-                        ) : (
-                          <span className="text-sm font-medium text-slate-900">{criterion.name}</span>
-                        )}
+                        <span className="text-sm font-medium text-slate-900">{criterion.name}</span>
                       </div>
                       <div className="flex items-center gap-3 w-48">
                         <input
@@ -1075,17 +1760,6 @@ export default function Settings() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingCriterionId(criterion.id);
-                            setEditingCriterionName(criterion.name);
-                          }}
-                          className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-100"
-                          aria-label="Modifier le critere"
-                        >
-                          <Edit className="h-4 w-4" />
-                        </button>
                         <button
                           type="button"
                           onClick={() => deleteCriterion(criterion.id)}
@@ -1121,11 +1795,13 @@ export default function Settings() {
                   <button
                     type="button"
                     onClick={saveLeadScoring}
-                    className="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+                    disabled={totalWeight > 100}
+                    className="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Save Weights
                   </button>
                 </div>
+                <p className="mt-3 text-sm font-medium text-amber-700">Score weights cannot exceed 100%</p>
               </div>
             </div>
           ) : (

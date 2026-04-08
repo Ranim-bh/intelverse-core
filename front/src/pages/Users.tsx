@@ -766,6 +766,14 @@ export default function Users() {
   }, []);
 
   useEffect(() => {
+    for (const guest of filteredUsers) {
+      if (!(guest.id in liveScores)) {
+        void loadScoreForGuest(guest.id);
+      }
+    }
+  }, [filteredUsers, liveScores]);
+
+  useEffect(() => {
     const applyRolesFromConfig = () => {
       const names = loadAccessControlState().roles
         .map((role) => role.name.trim())
@@ -897,10 +905,6 @@ export default function Users() {
                   const canEdit = Boolean(storedOffer) && (offerStatus === "generée" || offerStatus === "refusée");
                   const canView = Boolean(storedOffer) && offerStatus !== "en_attente";
                   const canSend = Boolean(storedOffer) && (offerStatus === "generée" || offerStatus === "refusée");
-
-                  if (!(guest.id in liveScores)) {
-                    void loadScoreForGuest(guest.id);
-                  }
 
                   return (
                     <tr

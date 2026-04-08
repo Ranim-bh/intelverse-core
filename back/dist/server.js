@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import { randomUUID } from "crypto";
 import Groq from "groq-sdk";
 import { loadDataset as loadTable, loadDatasets as loadTables, } from "./services/datasetLoader.js";
 import { getGuestScore, recommendForGuest, saveRecommendationForGuest, listRecommendedOffers, updateRecommendedOfferStatus, getLeadScoringWeights, saveLeadScoringWeights, getAvailableRecommendedOfferKpis, } from "./services/recommendationEngine.js";
@@ -19,16 +20,17 @@ const DEFAULT_ACCESS_ROLES = [
     { id: "partenaire", name: "Partenaire", isDefault: true },
 ];
 const DEFAULT_ACCESS_SERVICES = [
-    { id: "training_center", name: "Training Center" },
-    { id: "pitch_room", name: "Pitch Room" },
-    { id: "showcase_room", name: "Showcase Room" },
-    { id: "opportunity_room", name: "Opportunity Room" },
+    { id: "TRAINING_CENTER", name: "Training Center" },
+    { id: "PITCH_ROOM", name: "Pitch Room" },
+    { id: "SHOWCASE_ROOM", name: "Showcase Room" },
+    { id: "OPPORTUNITY_ROOM", name: "Opportunity Room" },
 ];
 const DEFAULT_ACCESS_GRANTS = {
-    guest: ["showcase_room"],
-    client: ["training_center", "showcase_room", "opportunity_room"],
-    partenaire: ["training_center", "pitch_room", "showcase_room", "opportunity_room"],
+    guest: ["SHOWCASE_ROOM"],
+    client: ["TRAINING_CENTER", "SHOWCASE_ROOM", "OPPORTUNITY_ROOM"],
+    partenaire: ["TRAINING_CENTER", "PITCH_ROOM", "SHOWCASE_ROOM", "OPPORTUNITY_ROOM"],
 };
+const DEFAULT_LEAD_SOURCE = "unknown";
 const slugifyId = (value) => value
     .toLowerCase()
     .trim()
@@ -44,6 +46,174 @@ const toSafeIdentifier = (name) => {
     }
     return `"${name.replace(/"/g, '""')}"`;
 };
+const SOURCE_PATTERNS = [
+    { pattern: /(^|\.)l\.facebook\.com$/i, source: "facebook" },
+    { pattern: /(^|\.)m\.facebook\.com$/i, source: "facebook" },
+    { pattern: /(^|\.)facebook\.com$/i, source: "facebook" },
+    { pattern: /(^|\.)instagram\.com$/i, source: "instagram" },
+    { pattern: /(^|\.)linkedin\.com$/i, source: "linkedin" },
+    { pattern: /(^|\.)tiktok\.com$/i, source: "tiktok" },
+    { pattern: /(^|\.)google\./i, source: "google" },
+];
+const canonicalLeadSourceFromHost = (hostOrUrl) => {
+    const raw = String(hostOrUrl ?? "").trim();
+    if (!raw)
+        return null;
+    const hostname = (() => {
+        try {
+            return new URL(raw).hostname;
+        }
+        catch {
+            return raw;
+        }
+    })().replace(/^www\./i, "").toLowerCase();
+    for (const item of SOURCE_PATTERNS) {
+        if (item.pattern.test(hostname))
+            return item.source;
+    }
+    return hostname || null;
+};
+const normalizeLeadSource = (value) => {
+    const raw = String(value ?? "").trim();
+    if (!raw)
+        return DEFAULT_LEAD_SOURCE;
+    const canonical = canonicalLeadSourceFromHost(raw);
+    return canonical || raw;
+};
+const inferLeadSource = (input) => {
+    const explicitCandidates = [
+        input.payloadLeadSource,
+        input.querySource,
+        input.queryUtmSource,
+        input.queryRef,
+    ];
+    for (const candidate of explicitCandidates) {
+        const raw = String(candidate ?? "").trim();
+        if (!raw)
+            continue;
+        if (raw.toLowerCase() === "direct")
+            continue;
+        return normalizeLeadSource(raw);
+    }
+    if (String(input.queryFbclid ?? "").trim()) {
+        return "facebook";
+    }
+    const referrerCandidates = [input.payloadReferrer, input.requestReferer];
+    for (const candidate of referrerCandidates) {
+        const source = canonicalLeadSourceFromHost(candidate);
+        if (source)
+            return source;
+    }
+    for (const candidate of explicitCandidates) {
+        const raw = String(candidate ?? "").trim();
+        if (!raw)
+            continue;
+        return normalizeLeadSource(raw);
+    }
+    return DEFAULT_LEAD_SOURCE;
+};
+const normalizeLeadRequestStatus = (value) => {
+    const raw = String(value ?? "").trim().toLowerCase();
+    if (raw === "accepted" || raw === "denied")
+        return raw;
+    return "pending";
+};
+const ensureLeadRequestsTable = async () => {
+    await queryDb(`
+    CREATE TABLE IF NOT EXISTS lead_requests (
+      id SERIAL PRIMARY KEY,
+      prenom TEXT NOT NULL,
+      nom TEXT NOT NULL,
+      email TEXT NOT NULL,
+      telephone TEXT,
+      domaine TEXT,
+      type_organisation TEXT,
+      pays TEXT,
+      description TEXT,
+      lead_source TEXT NOT NULL DEFAULT 'unknown',
+      source_referrer TEXT,
+      landing_url TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+};
+const saveGuestLeadToUsersTable = async (submission) => {
+    const tableExists = await queryDb(`
+    SELECT EXISTS(
+      SELECT 1 FROM information_schema.tables
+      WHERE table_schema='public' AND table_name='users'
+    ) AS exists
+  `);
+    if (!tableExists.rows[0]?.exists) {
+        return;
+    }
+    const columns = await getTableColumns("users");
+    if (columns.has("email")) {
+        const existingByEmail = await queryDb(`
+      SELECT 1 AS id
+      FROM users
+      WHERE LOWER(email) = LOWER($1)
+      LIMIT 1
+      `, [submission.email]);
+        if (existingByEmail.rows.length) {
+            return;
+        }
+    }
+    const insertColumns = [];
+    const placeholders = [];
+    const values = [];
+    const addColumn = (columnNames, value) => {
+        for (const columnName of columnNames) {
+            if (!columns.has(columnName))
+                continue;
+            insertColumns.push(columnName);
+            values.push(value);
+            placeholders.push(`$${values.length}`);
+            return true;
+        }
+        return false;
+    };
+    const fullName = `${submission.prenom} ${submission.nom}`.trim();
+    addColumn(["user_id"], randomUUID());
+    addColumn(["prenom", "first_name", "firstname", "given_name"], submission.prenom);
+    addColumn(["nom", "last_name", "lastname", "family_name"], submission.nom);
+    addColumn(["name", "full_name", "username"], fullName);
+    addColumn(["email"], submission.email);
+    addColumn(["telephone", "phone", "phone_number", "mobile"], submission.telephone);
+    addColumn(["domaine", "domain", "industry"], submission.domaine);
+    addColumn(["type_organisation", "type_organization", "organization_type", "typeclient", "company_type"], submission.typeOrganisation);
+    addColumn(["pays", "country"], submission.pays);
+    addColumn(["description", "message", "need"], submission.description);
+    addColumn(["lead_source", "source", "utm_source"], submission.leadSource);
+    addColumn(["source_referrer", "referrer", "referrer_url", "source_origin"], submission.sourceReferrer);
+    addColumn(["landing_url", "landing_page", "landing"], submission.landingUrl);
+    addColumn(["role"], "Guest");
+    if (!insertColumns.length) {
+        return;
+    }
+    const safeColumns = insertColumns.map((column) => toSafeIdentifier(column)).join(", ");
+    const sql = `INSERT INTO users (${safeColumns}) VALUES (${placeholders.join(", ")})`;
+    await queryDb(sql, values);
+};
+const mapLeadRequestRow = (row) => ({
+    id: row.id,
+    prenom: row.prenom,
+    nom: row.nom,
+    email: row.email,
+    telephone: row.telephone,
+    domaine: row.domaine,
+    typeOrganisation: row.type_organisation,
+    pays: row.pays,
+    description: row.description,
+    leadSource: row.lead_source,
+    sourceReferrer: row.source_referrer,
+    landingUrl: row.landing_url,
+    status: normalizeLeadRequestStatus(row.status),
+    createdAt: new Date(row.created_at).toISOString(),
+    updatedAt: new Date(row.updated_at).toISOString(),
+});
 const getTableColumns = async (tableName) => {
     const result = await queryDb(`
     SELECT column_name
@@ -54,47 +224,45 @@ const getTableColumns = async (tableName) => {
 };
 const ensureAccessMatrixTables = async () => {
     await queryDb(`
-    CREATE TABLE IF NOT EXISTS admin_roles (
+    CREATE TABLE IF NOT EXISTS roles (
       id TEXT PRIMARY KEY,
-      name TEXT NOT NULL UNIQUE,
-      is_default BOOLEAN NOT NULL DEFAULT false,
-      created_at TIMESTAMP DEFAULT NOW()
+      name TEXT NOT NULL UNIQUE
     )
   `);
     await queryDb(`
-    CREATE TABLE IF NOT EXISTS admin_services (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL UNIQUE,
-      created_at TIMESTAMP DEFAULT NOW()
+    CREATE TABLE IF NOT EXISTS service (
+      service_id TEXT PRIMARY KEY,
+      service_name TEXT
     )
   `);
     await queryDb(`
     CREATE TABLE IF NOT EXISTS admin_access_matrix (
-      role_id TEXT NOT NULL REFERENCES admin_roles(id) ON DELETE CASCADE,
-      service_id TEXT NOT NULL REFERENCES admin_services(id) ON DELETE CASCADE,
+      role_id TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+      service_id TEXT NOT NULL REFERENCES service(service_id) ON DELETE CASCADE,
       has_access BOOLEAN NOT NULL DEFAULT false,
       PRIMARY KEY (role_id, service_id)
     )
   `);
-    const roleCount = await queryDb("SELECT COUNT(*)::text AS count FROM admin_roles");
-    const serviceCount = await queryDb("SELECT COUNT(*)::text AS count FROM admin_services");
+    const roleCount = await queryDb("SELECT COUNT(*)::text AS count FROM roles");
+    const serviceCount = await queryDb("SELECT COUNT(*)::text AS count FROM service");
     if (Number(roleCount.rows[0]?.count ?? 0) === 0) {
         for (const role of DEFAULT_ACCESS_ROLES) {
-            await queryDb(`INSERT INTO admin_roles (id, name, is_default) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING`, [role.id, role.name, role.isDefault]);
+            await queryDb(`INSERT INTO roles (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`, [role.id, role.name]);
         }
     }
     if (Number(serviceCount.rows[0]?.count ?? 0) === 0) {
         for (const service of DEFAULT_ACCESS_SERVICES) {
-            await queryDb(`INSERT INTO admin_services (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`, [service.id, service.name]);
+            await queryDb(`INSERT INTO service (service_id, service_name) VALUES ($1, $2) ON CONFLICT (service_id) DO NOTHING`, [service.id, service.name]);
         }
     }
     const matrixCount = await queryDb("SELECT COUNT(*)::text AS count FROM admin_access_matrix");
     if (Number(matrixCount.rows[0]?.count ?? 0) === 0) {
-        const roles = await queryDb("SELECT id, name, is_default AS \"isDefault\" FROM admin_roles");
-        const services = await queryDb("SELECT id, name FROM admin_services");
+        const roles = await queryDb("SELECT id, name FROM roles");
+        const services = await queryDb("SELECT service_id AS id, COALESCE(NULLIF(service_name, ''), service_id) AS name FROM service");
         for (const role of roles.rows) {
+            const normalizedAllowed = new Set((DEFAULT_ACCESS_GRANTS[role.id] ?? []).map((value) => String(value).trim().toLowerCase()));
             for (const service of services.rows) {
-                const granted = Boolean(DEFAULT_ACCESS_GRANTS[role.id]?.includes(service.id));
+                const granted = normalizedAllowed.has(String(service.id).trim().toLowerCase());
                 await queryDb(`
           INSERT INTO admin_access_matrix (role_id, service_id, has_access)
           VALUES ($1, $2, $3)
@@ -104,53 +272,56 @@ const ensureAccessMatrixTables = async () => {
         }
     }
 };
-const mirrorServiceToCoreTable = async (service) => {
-    const tableExists = await queryDb(`
-    SELECT EXISTS(
-      SELECT 1 FROM information_schema.tables
-      WHERE table_schema='public' AND table_name='service'
-    ) AS exists
-  `);
-    if (!tableExists.rows[0]?.exists) {
-        return;
-    }
+const resolveServiceCoreColumns = async () => {
     const columns = await getTableColumns("service");
-    const insertColumns = [];
-    const values = [];
-    const placeholders = [];
-    if (columns.has("service_id")) {
-        insertColumns.push("service_id");
-        values.push(service.id.toUpperCase());
-        placeholders.push(`$${values.length}`);
-    }
-    if (columns.has("service_name")) {
-        insertColumns.push("service_name");
-        values.push(service.name);
-        placeholders.push(`$${values.length}`);
-    }
-    else if (columns.has("service")) {
-        insertColumns.push("service");
-        values.push(service.name);
-        placeholders.push(`$${values.length}`);
-    }
-    else if (columns.has("name")) {
-        insertColumns.push("name");
-        values.push(service.name);
-        placeholders.push(`$${values.length}`);
-    }
-    if (columns.has("price")) {
-        insertColumns.push("price");
-        values.push(0);
-        placeholders.push(`$${values.length}`);
-    }
-    if (!insertColumns.length)
+    const idColumn = columns.has("service_id")
+        ? "service_id"
+        : columns.has("id")
+            ? "id"
+            : "service_id";
+    const nameColumn = columns.has("service_name")
+        ? "service_name"
+        : columns.has("service")
+            ? "service"
+            : columns.has("name")
+                ? "name"
+                : "service_name";
+    return { idColumn, nameColumn };
+};
+const upsertServiceInCoreTable = async (service) => {
+    const { idColumn, nameColumn } = await resolveServiceCoreColumns();
+    const safeIdColumn = toSafeIdentifier(idColumn);
+    const safeNameColumn = toSafeIdentifier(nameColumn);
+    const normalizedId = String(service.id ?? "").trim();
+    const normalizedName = String(service.name ?? "").trim();
+    if (!normalizedId || !normalizedName)
         return;
-    try {
-        await queryDb(`INSERT INTO service (${insertColumns.join(", ")}) VALUES (${placeholders.join(", ")})`, values);
-    }
-    catch {
-        // Ignore duplicate conflicts without preventing admin matrix updates.
-    }
+    const updateResult = await queryDb(`
+    UPDATE service
+    SET ${safeNameColumn} = $2
+    WHERE ${safeIdColumn}::text = $1::text
+       OR LOWER(${safeNameColumn}) = LOWER($2)
+    `, [normalizedId, normalizedName]);
+    if ((updateResult.rowCount ?? 0) > 0)
+        return;
+    await queryDb(`INSERT INTO service (${safeIdColumn}, ${safeNameColumn}) VALUES ($1, $2)`, [normalizedId, normalizedName]);
+};
+const deleteServiceFromCoreTable = async (identifier) => {
+    const { idColumn, nameColumn } = await resolveServiceCoreColumns();
+    const safeIdColumn = toSafeIdentifier(idColumn);
+    const safeNameColumn = toSafeIdentifier(nameColumn);
+    const found = await queryDb(`
+    SELECT ${safeIdColumn}::text AS id, ${safeNameColumn}::text AS name
+    FROM service
+    WHERE ${safeIdColumn}::text = $1::text
+       OR LOWER(${safeNameColumn}) = LOWER($1)
+    LIMIT 1
+    `, [identifier]);
+    const row = found.rows[0];
+    if (!row)
+        return null;
+    await queryDb(`DELETE FROM service WHERE ${safeIdColumn}::text = $1::text`, [row.id]);
+    return row;
 };
 const syncUsersRoleConstraint = async () => {
     const tableExists = await queryDb(`
@@ -164,7 +335,7 @@ const syncUsersRoleConstraint = async () => {
     const columns = await getTableColumns("users");
     if (!columns.has("role"))
         return;
-    const roles = await queryDb("SELECT name FROM admin_roles ORDER BY created_at ASC");
+    const roles = await queryDb("SELECT name FROM roles ORDER BY name ASC");
     const existing = await queryDb("SELECT DISTINCT role FROM users WHERE role IS NOT NULL");
     const all = new Set();
     for (const row of roles.rows)
@@ -191,13 +362,23 @@ const syncUsersRoleConstraint = async () => {
 };
 const getAdminAccessMatrixPayload = async () => {
     await ensureAccessMatrixTables();
-    const roles = await queryDb(`SELECT id, name, is_default AS "isDefault" FROM admin_roles ORDER BY created_at ASC, name ASC`);
-    const services = await queryDb(`SELECT id, name FROM admin_services ORDER BY created_at ASC, name ASC`);
+    const { idColumn, nameColumn } = await resolveServiceCoreColumns();
+    const safeIdColumn = toSafeIdentifier(idColumn);
+    const safeNameColumn = toSafeIdentifier(nameColumn);
+    const roleRows = await queryDb(`SELECT id, name FROM roles ORDER BY name ASC`);
+    const serviceRows = await queryDb(`SELECT ${safeIdColumn}::text AS id, COALESCE(NULLIF(${safeNameColumn}, ''), ${safeIdColumn}::text) AS name FROM service ORDER BY ${safeNameColumn} ASC`);
     const cells = await queryDb(`SELECT role_id, service_id, has_access FROM admin_access_matrix`);
+    const defaultIds = new Set(DEFAULT_ACCESS_ROLES.map((role) => role.id));
+    const roles = roleRows.rows.map((role) => ({
+        id: role.id,
+        name: role.name,
+        isDefault: defaultIds.has(role.id),
+    }));
+    const services = serviceRows.rows;
     const matrix = {};
-    for (const role of roles.rows) {
+    for (const role of roles) {
         matrix[role.id] = {};
-        for (const service of services.rows) {
+        for (const service of services) {
             const row = matrix[role.id];
             if (row) {
                 row[service.id] = false;
@@ -210,7 +391,7 @@ const getAdminAccessMatrixPayload = async () => {
             row[cell.service_id] = Boolean(cell.has_access);
         }
     }
-    return { roles: roles.rows, services: services.rows, matrix };
+    return { roles, services, matrix };
 };
 const ensureTables = async () => {
     return loadTables(true);
@@ -366,6 +547,103 @@ const parsePackResponse = (raw) => {
     }
     return parsed;
 };
+const toHHMM = (value) => {
+    const raw = String(value ?? "").trim();
+    if (!raw)
+        return "";
+    const match = raw.match(/^(\d{1,2}):(\d{2})/);
+    if (!match)
+        return raw;
+    const hours = String(match[1] ?? "").padStart(2, "0");
+    const minutes = String(match[2] ?? "00");
+    return `${hours}:${minutes}`;
+};
+const normalizeInstructionSteps = (value) => {
+    if (!Array.isArray(value))
+        return [];
+    return value
+        .map((item, index) => {
+        const row = (item ?? {});
+        const step = Number(row.step ?? index + 1);
+        const title = String(row.title ?? "").trim();
+        const description = String(row.description ?? "").trim();
+        if (!title)
+            return null;
+        return {
+            step: Number.isFinite(step) && step > 0 ? step : index + 1,
+            title,
+            description,
+        };
+    })
+        .filter((item) => item !== null)
+        .sort((a, b) => a.step - b.step);
+};
+const buildGuestInstructionPayload = async (settingId) => {
+    const settingsResult = settingId
+        ? await queryDb(`
+        SELECT
+          id,
+          presentation,
+          available_days,
+          start_time::text AS start_time,
+          end_time::text AS end_time,
+          calendar_link,
+          steps,
+          support_email,
+          chatbot_link
+        FROM guest_instruction_settings
+        WHERE id = $1
+        LIMIT 1
+        `, [settingId])
+        : await queryDb(`
+        SELECT
+          id,
+          presentation,
+          available_days,
+          start_time::text AS start_time,
+          end_time::text AS end_time,
+          calendar_link,
+          steps,
+          support_email,
+          chatbot_link
+        FROM guest_instruction_settings
+        ORDER BY updated_at DESC NULLS LAST, id DESC
+        LIMIT 1
+      `);
+    const setting = settingsResult.rows[0];
+    if (!setting)
+        return null;
+    const rulesResult = await queryDb(`
+      SELECT position, rule
+      FROM guest_instruction_rules
+      WHERE setting_id = $1
+      ORDER BY position ASC, id ASC
+    `, [setting.id]);
+    const servicesResult = await queryDb(`
+      SELECT s.service_name
+      FROM admin_access_matrix aam
+      JOIN service s ON s.service_id = aam.service_id
+      WHERE aam.role_id = 'guest' AND aam.has_access = true
+      ORDER BY s.service_name ASC
+    `);
+    return {
+        presentation: String(setting.presentation ?? "").trim(),
+        available_days: Array.isArray(setting.available_days) ? setting.available_days.map((day) => String(day)) : [],
+        start_time: toHHMM(setting.start_time),
+        end_time: toHHMM(setting.end_time),
+        calendar_link: String(setting.calendar_link ?? "").trim(),
+        steps: normalizeInstructionSteps(setting.steps),
+        rules: rulesResult.rows.map((row, index) => ({
+            position: Number(row.position ?? index + 1),
+            rule: String(row.rule ?? "").trim(),
+        })).filter((row) => row.rule.length > 0),
+        services: servicesResult.rows
+            .map((row) => String(row.service_name ?? "").trim())
+            .filter(Boolean),
+        support_email: String(setting.support_email ?? "").trim(),
+        chatbot_link: String(setting.chatbot_link ?? "").trim(),
+    };
+};
 const sanitizeMatchScore = (raw, fallback) => {
     const value = String(raw ?? "").trim();
     if (/^\d{1,3}%$/.test(value))
@@ -382,60 +660,280 @@ const priorityToMatchScore = (priority, fallback) => {
         return "68%";
     return `${fallback}%`;
 };
-app.get("/api/health", (_req, res) => {
-    res.json({
-        ok: true,
-        service: "intelverse-backend",
-        timestamp: new Date().toISOString(),
-    });
-});
-app.get("/api/tables", async (_req, res) => {
+app.get("/api/requests", async (_req, res) => {
     try {
-        const tables = await ensureTables();
-        return res.json(tables);
+        await ensureLeadRequestsTable();
+        const result = await queryDb(`
+      SELECT
+        id,
+        prenom,
+        nom,
+        email,
+        telephone,
+        domaine,
+        type_organisation,
+        pays,
+        description,
+        lead_source,
+        source_referrer,
+        landing_url,
+        status,
+        created_at,
+        updated_at
+      FROM lead_requests
+      ORDER BY created_at DESC, id DESC
+    `);
+        return res.json(result.rows.map(mapLeadRequestRow));
     }
     catch (error) {
-        const message = error instanceof Error ? error.message : "Failed to load tables";
+        const message = error instanceof Error ? error.message : "Failed to load requests";
         return res.status(500).json({ error: message });
     }
 });
-app.get("/api/tables/:key", async (req, res) => {
+app.post("/api/requests", async (req, res) => {
     try {
-        const tables = await ensureTables();
-        const { key } = req.params;
-        const value = tables[key];
-        if (value === undefined) {
-            return res.status(404).json({ error: `Table '${key}' not found` });
+        await ensureLeadRequestsTable();
+        const payload = req.body;
+        const prenom = String(payload.prenom ?? "").trim();
+        const nom = String(payload.nom ?? "").trim();
+        const email = String(payload.email ?? "").trim();
+        if (!prenom || !nom || !email) {
+            return res.status(400).json({ error: "prenom, nom and email are required" });
         }
-        return res.json(value);
+        const leadSource = inferLeadSource({
+            payloadLeadSource: payload.leadSource,
+            payloadReferrer: payload.sourceReferrer,
+            querySource: req.query.source,
+            queryUtmSource: req.query.utm_source,
+            queryRef: req.query.ref,
+            queryFbclid: req.query.fbclid,
+            requestReferer: req.get("referer"),
+        });
+        const sourceReferrer = String(payload.sourceReferrer ?? req.get("referer") ?? "").trim() || null;
+        const fallbackLandingUrl = `${req.protocol}://${req.get("host")}${req.originalUrl}`;
+        const landingUrl = String(payload.landingUrl ?? fallbackLandingUrl).trim() || null;
+        const status = normalizeLeadRequestStatus(payload.status);
+        const existing = await queryDb(`
+      SELECT
+        id,
+        prenom,
+        nom,
+        email,
+        telephone,
+        domaine,
+        type_organisation,
+        pays,
+        description,
+        lead_source,
+        source_referrer,
+        landing_url,
+        status,
+        created_at,
+        updated_at
+      FROM lead_requests
+      WHERE LOWER(email) = LOWER($1)
+      ORDER BY id DESC
+      LIMIT 1
+      `, [email]);
+        if (existing.rows[0]) {
+            const updatedResult = await queryDb(`
+        UPDATE lead_requests
+        SET
+          prenom = $2,
+          nom = $3,
+          telephone = $4,
+          domaine = $5,
+          type_organisation = $6,
+          pays = $7,
+          description = $8,
+          lead_source = $9,
+          source_referrer = $10,
+          landing_url = $11,
+          status = CASE WHEN status = 'pending' THEN $12 ELSE status END,
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING
+          id,
+          prenom,
+          nom,
+          email,
+          telephone,
+          domaine,
+          type_organisation,
+          pays,
+          description,
+          lead_source,
+          source_referrer,
+          landing_url,
+          status,
+          created_at,
+          updated_at
+        `, [
+                existing.rows[0].id,
+                prenom,
+                nom,
+                String(payload.telephone ?? "").trim() || null,
+                String(payload.domaine ?? "").trim() || null,
+                String(payload.typeOrganisation ?? "").trim() || null,
+                String(payload.pays ?? "").trim() || null,
+                String(payload.description ?? "").trim() || null,
+                leadSource,
+                sourceReferrer,
+                landingUrl,
+                status,
+            ]);
+            const updated = updatedResult.rows[0];
+            if (!updated) {
+                return res.status(500).json({ error: "Failed to update existing request" });
+            }
+            return res.status(200).json(mapLeadRequestRow(updated));
+        }
+        const result = await queryDb(`
+      INSERT INTO lead_requests (
+        prenom,
+        nom,
+        email,
+        telephone,
+        domaine,
+        type_organisation,
+        pays,
+        description,
+        lead_source,
+        source_referrer,
+        landing_url,
+        status
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      RETURNING
+        id,
+        prenom,
+        nom,
+        email,
+        telephone,
+        domaine,
+        type_organisation,
+        pays,
+        description,
+        lead_source,
+        source_referrer,
+        landing_url,
+        status,
+        created_at,
+        updated_at
+    `, [
+            prenom,
+            nom,
+            email,
+            String(payload.telephone ?? "").trim() || null,
+            String(payload.domaine ?? "").trim() || null,
+            String(payload.typeOrganisation ?? "").trim() || null,
+            String(payload.pays ?? "").trim() || null,
+            String(payload.description ?? "").trim() || null,
+            leadSource,
+            sourceReferrer,
+            landingUrl,
+            status,
+        ]);
+        const inserted = result.rows[0];
+        if (!inserted) {
+            return res.status(500).json({ error: "Failed to save request" });
+        }
+        return res.status(201).json(mapLeadRequestRow(inserted));
     }
     catch (error) {
-        const message = error instanceof Error ? error.message : "Failed to load tables";
+        const message = error instanceof Error ? error.message : "Failed to save request";
+        return res.status(500).json({ error: message });
+    }
+});
+app.patch("/api/requests/:id/:status", async (req, res) => {
+    try {
+        await ensureLeadRequestsTable();
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id) || id <= 0) {
+            return res.status(400).json({ error: "Invalid request id" });
+        }
+        const statusParam = String(req.params.status ?? "").toLowerCase();
+        const status = statusParam === "accept" ? "accepted" : statusParam === "deny" ? "denied" : null;
+        if (!status) {
+            return res.status(400).json({ error: "Unsupported request status update" });
+        }
+        const previous = await queryDb(`
+      SELECT
+        id,
+        status,
+        prenom,
+        nom,
+        email,
+        telephone,
+        domaine,
+        type_organisation,
+        pays,
+        description,
+        lead_source,
+        source_referrer,
+        landing_url
+      FROM lead_requests
+      WHERE id = $1
+      `, [id]);
+        const previousRow = previous.rows[0];
+        if (!previousRow) {
+            return res.status(404).json({ error: "Request not found" });
+        }
+        const result = await queryDb(`
+      UPDATE lead_requests
+      SET status = $2, updated_at = NOW()
+      WHERE id = $1
+      RETURNING
+        id,
+        prenom,
+        nom,
+        email,
+        telephone,
+        domaine,
+        type_organisation,
+        pays,
+        description,
+        lead_source,
+        source_referrer,
+        landing_url,
+        status,
+        created_at,
+        updated_at
+    `, [id, status]);
+        const updated = result.rows[0];
+        if (!updated) {
+            return res.status(404).json({ error: "Request not found" });
+        }
+        const shouldCreateUser = status === "accepted" && previousRow.status !== "accepted";
+        if (shouldCreateUser) {
+            await saveGuestLeadToUsersTable({
+                prenom: updated.prenom,
+                nom: updated.nom,
+                email: updated.email,
+                telephone: updated.telephone,
+                domaine: updated.domaine,
+                typeOrganisation: updated.type_organisation,
+                pays: updated.pays,
+                description: updated.description,
+                leadSource: updated.lead_source,
+                sourceReferrer: updated.source_referrer,
+                landingUrl: updated.landing_url,
+            });
+        }
+        return res.json(mapLeadRequestRow(updated));
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to update request";
         return res.status(500).json({ error: message });
     }
 });
 app.get("/api/datasets", async (_req, res) => {
     try {
-        const tables = await ensureTables();
+        const tables = await loadTables(true);
         return res.json(tables);
     }
     catch (error) {
-        const message = error instanceof Error ? error.message : "Failed to load data";
-        return res.status(500).json({ error: message });
-    }
-});
-app.get("/api/datasets/:key", async (req, res) => {
-    try {
-        const tables = await ensureTables();
-        const { key } = req.params;
-        const value = tables[key];
-        if (value === undefined) {
-            return res.status(404).json({ error: `Table '${key}' not found` });
-        }
-        return res.json(value);
-    }
-    catch (error) {
-        const message = error instanceof Error ? error.message : "Failed to load data";
+        const message = error instanceof Error ? error.message : "Failed to load datasets";
         return res.status(500).json({ error: message });
     }
 });
@@ -457,6 +955,125 @@ app.get("/api/lead-scoring/kpis", async (_req, res) => {
     catch (error) {
         const message = error instanceof Error ? error.message : "Failed to load KPI list";
         return res.status(500).json({ error: message });
+    }
+});
+app.get("/api/guest-instruction", async (_req, res) => {
+    try {
+        const payload = await buildGuestInstructionPayload();
+        if (!payload) {
+            return res.status(404).json({ error: "No guest instruction setting found" });
+        }
+        return res.json(payload);
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to load guest instruction";
+        return res.status(500).json({ error: message });
+    }
+});
+app.put("/api/guest-instruction", async (req, res) => {
+    const payload = req.body;
+    const pool = getDbPool();
+    const client = await pool.connect();
+    try {
+        const presentation = String(payload.presentation ?? "").trim();
+        const availableDays = Array.isArray(payload.available_days)
+            ? payload.available_days.map((day) => String(day).trim()).filter(Boolean)
+            : [];
+        const startTime = toHHMM(payload.start_time);
+        const endTime = toHHMM(payload.end_time);
+        const calendarLink = String(payload.calendar_link ?? "").trim();
+        const steps = normalizeInstructionSteps(payload.steps);
+        const rules = Array.isArray(payload.rules)
+            ? payload.rules
+                .map((row, index) => ({
+                position: Number(row?.position ?? index + 1),
+                rule: String(row?.rule ?? "").trim(),
+            }))
+                .filter((row) => row.rule.length > 0)
+            : [];
+        const supportEmail = String(payload.support_email ?? "").trim();
+        const chatbotLink = String(payload.chatbot_link ?? "").trim();
+        await client.query("BEGIN");
+        const current = await client.query(`SELECT id FROM guest_instruction_settings ORDER BY updated_at DESC NULLS LAST, id DESC LIMIT 1 FOR UPDATE`);
+        let settingId;
+        if (current.rows[0]?.id) {
+            settingId = current.rows[0].id;
+            await client.query(`
+          UPDATE guest_instruction_settings
+          SET
+            presentation = $2,
+            available_days = $3::text[],
+            start_time = NULLIF($4, '')::time,
+            end_time = NULLIF($5, '')::time,
+            calendar_link = $6,
+            steps = $7::jsonb,
+            support_email = $8,
+            chatbot_link = $9,
+            updated_at = NOW()
+          WHERE id = $1
+        `, [
+                settingId,
+                presentation,
+                availableDays,
+                startTime,
+                endTime,
+                calendarLink,
+                JSON.stringify(steps),
+                supportEmail,
+                chatbotLink,
+            ]);
+        }
+        else {
+            const inserted = await client.query(`
+          INSERT INTO guest_instruction_settings (
+            presentation,
+            available_days,
+            start_time,
+            end_time,
+            calendar_link,
+            steps,
+            support_email,
+            chatbot_link,
+            updated_at
+          ) VALUES (
+            $1,
+            $2::text[],
+            NULLIF($3, '')::time,
+            NULLIF($4, '')::time,
+            $5,
+            $6::jsonb,
+            $7,
+            $8,
+            NOW()
+          )
+          RETURNING id
+        `, [
+                presentation,
+                availableDays,
+                startTime,
+                endTime,
+                calendarLink,
+                JSON.stringify(steps),
+                supportEmail,
+                chatbotLink,
+            ]);
+            settingId = inserted.rows[0].id;
+        }
+        await client.query(`DELETE FROM guest_instruction_rules WHERE setting_id = $1`, [settingId]);
+        for (const row of rules.sort((a, b) => a.position - b.position)) {
+            await client.query(`INSERT INTO guest_instruction_rules (setting_id, rule, position) VALUES ($1, $2, $3)`, [settingId, row.rule, row.position]);
+        }
+        await client.query("COMMIT");
+        const output = await buildGuestInstructionPayload(settingId);
+        return res.json(output);
+    }
+    catch (error) {
+        await client.query("ROLLBACK");
+        const message = error instanceof Error ? error.message : "Failed to save guest instruction";
+        return res.status(500).json({ error: message });
+    }
+    finally {
+        client.release();
     }
 });
 app.put("/api/lead-scoring/weights", async (req, res) => {
@@ -497,13 +1114,15 @@ app.patch("/api/admin/access-matrix", async (req, res) => {
         await ensureAccessMatrixTables();
         await client.query("BEGIN");
         await client.query("DELETE FROM admin_access_matrix");
-        await client.query("DELETE FROM admin_roles");
-        await client.query("DELETE FROM admin_services");
         for (const role of payload.roles) {
-            await client.query(`INSERT INTO admin_roles (id, name, is_default) VALUES ($1, $2, $3)`, [role.id, role.name, Boolean(role.isDefault)]);
+            await client.query(`
+        INSERT INTO roles (id, name)
+        VALUES ($1, $2)
+        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
+        `, [role.id, role.name]);
         }
         for (const service of payload.services) {
-            await client.query(`INSERT INTO admin_services (id, name) VALUES ($1, $2)`, [service.id, service.name]);
+            await upsertServiceInCoreTable(service);
         }
         for (const role of payload.roles) {
             for (const service of payload.services) {
@@ -512,10 +1131,13 @@ app.patch("/api/admin/access-matrix", async (req, res) => {
             }
         }
         await client.query("COMMIT");
-        for (const service of payload.services) {
-            await mirrorServiceToCoreTable(service);
+        try {
+            await syncUsersRoleConstraint();
         }
-        await syncUsersRoleConstraint();
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.warn(`Users role constraint sync skipped: ${message}`);
+        }
         const out = await getAdminAccessMatrixPayload();
         return res.json(out);
     }
@@ -540,12 +1162,21 @@ app.post("/api/admin/roles", async (req, res) => {
             name,
             isDefault: false,
         };
-        await queryDb(`INSERT INTO admin_roles (id, name, is_default) VALUES ($1, $2, false)`, [role.id, role.name]);
-        const services = await queryDb("SELECT id, name FROM admin_services");
+        await queryDb(`INSERT INTO roles (id, name) VALUES ($1, $2)`, [role.id, role.name]);
+        const { idColumn, nameColumn } = await resolveServiceCoreColumns();
+        const safeIdColumn = toSafeIdentifier(idColumn);
+        const safeNameColumn = toSafeIdentifier(nameColumn);
+        const services = await queryDb(`SELECT ${safeIdColumn}::text AS id, COALESCE(NULLIF(${safeNameColumn}, ''), ${safeIdColumn}::text) AS name FROM service`);
         for (const service of services.rows) {
             await queryDb(`INSERT INTO admin_access_matrix (role_id, service_id, has_access) VALUES ($1, $2, false)`, [role.id, service.id]);
         }
-        await syncUsersRoleConstraint();
+        try {
+            await syncUsersRoleConstraint();
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.warn(`Users role constraint sync skipped: ${message}`);
+        }
         return res.status(201).json(role);
     }
     catch (error) {
@@ -560,14 +1191,21 @@ app.delete("/api/admin/roles/:id", async (req, res) => {
         if (!id) {
             return res.status(400).json({ error: "Missing role id" });
         }
-        const roleRes = await queryDb(`SELECT id, name, is_default AS "isDefault" FROM admin_roles WHERE id=$1`, [id]);
+        const roleRes = await queryDb(`SELECT id, name FROM roles WHERE id=$1`, [id]);
         const role = roleRes.rows[0];
         if (!role)
             return res.status(404).json({ error: "Role not found" });
-        if (role.isDefault)
+        const isDefault = DEFAULT_ACCESS_ROLES.some((item) => item.id === role.id);
+        if (isDefault)
             return res.status(400).json({ error: "Default roles cannot be deleted" });
-        await queryDb(`DELETE FROM admin_roles WHERE id=$1`, [id]);
-        await syncUsersRoleConstraint();
+        await queryDb(`DELETE FROM roles WHERE id=$1`, [id]);
+        try {
+            await syncUsersRoleConstraint();
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.warn(`Users role constraint sync skipped: ${message}`);
+        }
         return res.status(204).send();
     }
     catch (error) {
@@ -583,15 +1221,14 @@ app.post("/api/admin/services", async (req, res) => {
             return res.status(400).json({ error: "Missing service name" });
         }
         const service = {
-            id: createEntityId(name),
+            id: (slugifyId(name) || createEntityId(name)).toUpperCase(),
             name,
         };
-        await queryDb(`INSERT INTO admin_services (id, name) VALUES ($1, $2)`, [service.id, service.name]);
-        const roles = await queryDb("SELECT id, name, is_default AS \"isDefault\" FROM admin_roles");
+        await upsertServiceInCoreTable(service);
+        const roles = await queryDb("SELECT id, name FROM roles");
         for (const role of roles.rows) {
             await queryDb(`INSERT INTO admin_access_matrix (role_id, service_id, has_access) VALUES ($1, $2, false)`, [role.id, service.id]);
         }
-        await mirrorServiceToCoreTable(service);
         return res.status(201).json(service);
     }
     catch (error) {
@@ -602,25 +1239,13 @@ app.post("/api/admin/services", async (req, res) => {
 app.delete("/api/admin/services/:id", async (req, res) => {
     try {
         await ensureAccessMatrixTables();
-        const id = String(req.params.id ?? "").trim();
-        if (!id) {
+        const rawIdentifier = String(req.params.id ?? "").trim();
+        if (!rawIdentifier) {
             return res.status(400).json({ error: "Missing service id" });
         }
-        const serviceRes = await queryDb(`SELECT id, name FROM admin_services WHERE id=$1`, [id]);
-        const service = serviceRes.rows[0];
+        const service = await deleteServiceFromCoreTable(rawIdentifier);
         if (!service)
             return res.status(404).json({ error: "Service not found" });
-        await queryDb(`DELETE FROM admin_services WHERE id=$1`, [id]);
-        // Best effort mirror cleanup from the core service table.
-        try {
-            await queryDb(`DELETE FROM service WHERE service_id=$1 OR service_name=$2 OR service=$2 OR name=$2`, [
-                service.id.toUpperCase(),
-                service.name,
-            ]);
-        }
-        catch {
-            // ignore if core table columns differ
-        }
         return res.status(204).send();
     }
     catch (error) {

@@ -82,11 +82,16 @@ const resolveTables = async () => {
         : names.has("guest_kpis")
             ? "guest_kpis"
             : "";
-    const servicesTable = names.has("services")
-        ? "services"
-        : names.has("service")
-            ? "service"
-            : "";
+    const configuredServicesTable = String(process.env.SERVICES_TABLE_KEY ?? "")
+        .trim()
+        .toLowerCase();
+    const servicesTable = configuredServicesTable && names.has(configuredServicesTable)
+        ? configuredServicesTable
+        : names.has("services")
+            ? "services"
+            : names.has("service")
+                ? "service"
+                : "";
     const roomKpiTable = names.has("room_kpi") ? "room_kpi" : "";
     const packTable = names.has("pack") ? "pack" : "";
     const packServiceTable = names.has("pack_service") ? "pack_service" : "";
@@ -106,6 +111,11 @@ const resolveTables = async () => {
   `, [servicesTable]);
     const serviceColumns = new Set(serviceColumnsResult.rows
         .map((r) => String(r.column_name).toLowerCase()));
+    const servicesIdColumn = serviceColumns.has("service_id")
+        ? "service_id"
+        : serviceColumns.has("id")
+            ? "id"
+            : "service_id";
     const servicesLabelColumn = serviceColumns.has("service")
         ? "service"
         : serviceColumns.has("service_name")
@@ -116,6 +126,7 @@ const resolveTables = async () => {
     return {
         guestTable,
         servicesTable,
+        servicesIdColumn,
         servicesLabelColumn,
         usersTable,
         roomKpiTable,
@@ -238,6 +249,7 @@ const fetchGuestKpis = async (guestId, tables) => {
 const fetchRoomKpis = async (guestId, tables) => {
     const roomKpiTable = quoteIdentifier(tables.roomKpiTable);
     const servicesTable = quoteIdentifier(tables.servicesTable);
+    const servicesIdColumn = quoteIdentifier(tables.servicesIdColumn);
     const servicesLabelColumn = quoteIdentifier(tables.servicesLabelColumn);
     const result = await queryDb(`
     SELECT
@@ -248,7 +260,7 @@ const fetchRoomKpis = async (guestId, tables) => {
       SUM(rk.nb_participants)::numeric AS total_participants_in_room,
       COUNT(rk.kpi_id)::numeric AS nb_sessions_in_room
     FROM ${roomKpiTable} rk
-    JOIN ${servicesTable} s ON s.service_id = rk.service_id
+    JOIN ${servicesTable} s ON s.${servicesIdColumn}::text = rk.service_id::text
     WHERE rk.user_id = $1
     GROUP BY rk.service_id, s.${servicesLabelColumn}
     ORDER BY total_time_in_room DESC
@@ -310,6 +322,7 @@ const fetchPacksForTier = async (nbRooms, tables) => {
     const packTable = quoteIdentifier(tables.packTable);
     const packServiceTable = quoteIdentifier(tables.packServiceTable);
     const servicesTable = quoteIdentifier(tables.servicesTable);
+    const servicesIdColumn = quoteIdentifier(tables.servicesIdColumn);
     const servicesLabelColumn = quoteIdentifier(tables.servicesLabelColumn);
     const packs = await queryDb(`
     SELECT
@@ -318,25 +331,60 @@ const fetchPacksForTier = async (nbRooms, tables) => {
       p.pack_code,
       p.nb_rooms,
       p.description,
-      string_agg(s.service_id, ',' ORDER BY s.service_id) AS service_ids,
+      string_agg(s.${servicesIdColumn}::text, ',' ORDER BY s.${servicesIdColumn}::text) AS service_ids,
       string_agg(s.${servicesLabelColumn}, ', ' ORDER BY s.${servicesLabelColumn}) AS service_names
     FROM ${packTable} p
     JOIN ${packServiceTable} ps ON ps.pack_id = p.pack_id
-    JOIN ${servicesTable} s ON s.service_id = ps.service_id
+    JOIN ${servicesTable} s ON s.${servicesIdColumn}::text = ps.service_id::text
     WHERE p.nb_rooms = $1
     GROUP BY p.pack_id, p.pack_name, p.pack_code, p.nb_rooms, p.description
   `, [nbRooms]);
-    if (!packs.rows.length) {
+    if (packs.rows.length) {
+        return packs.rows;
+    }
+    const available = await queryDb(`
+    SELECT
+      p.pack_id,
+      p.pack_name,
+      p.pack_code,
+      p.nb_rooms,
+      p.description,
+      string_agg(s.${servicesIdColumn}::text, ',' ORDER BY s.${servicesIdColumn}::text) AS service_ids,
+      string_agg(s.${servicesLabelColumn}, ', ' ORDER BY s.${servicesLabelColumn}) AS service_names
+    FROM ${packTable} p
+    JOIN ${packServiceTable} ps ON ps.pack_id = p.pack_id
+    JOIN ${servicesTable} s ON s.${servicesIdColumn}::text = ps.service_id::text
+    GROUP BY p.pack_id, p.pack_name, p.pack_code, p.nb_rooms, p.description
+  `);
+    if (!available.rows.length) {
         const err = new Error(`No pack found for tier size ${nbRooms}`);
         err.status = 404;
         throw err;
     }
-    return packs.rows;
+    const nearestNbRooms = [...new Set(available.rows.map((row) => toNum(row.nb_rooms)))]
+        .filter((value) => value > 0)
+        .sort((a, b) => {
+        const delta = Math.abs(a - nbRooms) - Math.abs(b - nbRooms);
+        return delta !== 0 ? delta : a - b;
+    })[0];
+    if (!nearestNbRooms || nearestNbRooms <= 0) {
+        const err = new Error(`No pack found for tier size ${nbRooms}`);
+        err.status = 404;
+        throw err;
+    }
+    const fallback = available.rows.filter((row) => toNum(row.nb_rooms) === nearestNbRooms);
+    if (fallback.length) {
+        return fallback;
+    }
+    const err = new Error(`No pack found for tier size ${nbRooms}`);
+    err.status = 404;
+    throw err;
 };
 const fetchPackByCode = async (packCode, tables) => {
     const packTable = quoteIdentifier(tables.packTable);
     const packServiceTable = quoteIdentifier(tables.packServiceTable);
     const servicesTable = quoteIdentifier(tables.servicesTable);
+    const servicesIdColumn = quoteIdentifier(tables.servicesIdColumn);
     const servicesLabelColumn = quoteIdentifier(tables.servicesLabelColumn);
     const selected = await queryDb(`
     SELECT
@@ -345,16 +393,33 @@ const fetchPackByCode = async (packCode, tables) => {
       p.pack_code,
       p.nb_rooms,
       p.description,
-      string_agg(s.service_id, ',' ORDER BY s.service_id) AS service_ids,
+      string_agg(s.${servicesIdColumn}::text, ',' ORDER BY s.${servicesIdColumn}::text) AS service_ids,
       string_agg(s.${servicesLabelColumn}, ', ' ORDER BY s.${servicesLabelColumn}) AS service_names
     FROM ${packTable} p
     JOIN ${packServiceTable} ps ON ps.pack_id = p.pack_id
-    JOIN ${servicesTable} s ON s.service_id = ps.service_id
-    WHERE p.pack_code = $1
+    JOIN ${servicesTable} s ON s.${servicesIdColumn}::text = ps.service_id::text
+    WHERE LOWER(TRIM(p.pack_code)) = LOWER(TRIM($1))
     GROUP BY p.pack_id, p.pack_name, p.pack_code, p.nb_rooms, p.description
     LIMIT 1
   `, [packCode]);
     return selected.rows[0];
+};
+const pickDeterministicFallbackPack = (score, packs) => {
+    if (!packs.length) {
+        throw new Error("No pack candidates available for fallback selection");
+    }
+    const topRoom = String(score.score_breakdown.top_room ?? "").trim().toLowerCase();
+    if (topRoom) {
+        const byTopRoom = packs.find((pack) => parseCsvList(String(pack.service_names ?? "")).some((serviceName) => String(serviceName).trim().toLowerCase() === topRoom));
+        if (byTopRoom)
+            return byTopRoom;
+    }
+    const sorted = [...packs].sort((a, b) => {
+        const left = String(a.pack_code ?? "").trim().toLowerCase();
+        const right = String(b.pack_code ?? "").trim().toLowerCase();
+        return left.localeCompare(right);
+    });
+    return sorted[0];
 };
 const ensureRecommendedOffersTable = async () => {
     await queryDb(`
@@ -861,12 +926,24 @@ export const recommendForGuest = async (guestId) => {
     const tables = await resolveTables();
     const { nb_rooms } = resolveTier(score.engagement_score);
     const packs = await fetchPacksForTier(nb_rooms, tables);
-    const ai = await callGroqRecommendation(score, packs);
-    const selected = await fetchPackByCode(ai.recommended_pack_code, tables);
+    let selected;
+    let reason = "Recommended from engagement signals.";
+    try {
+        const ai = await callGroqRecommendation(score, packs);
+        selected = await fetchPackByCode(ai.recommended_pack_code, tables);
+        if (!selected) {
+            selected = packs.find((pack) => n(pack.pack_code) === n(ai.recommended_pack_code));
+        }
+        if (selected) {
+            reason = ai.reason;
+        }
+    }
+    catch {
+        selected = undefined;
+    }
     if (!selected) {
-        const err = new Error(`Pack code not found in DB: ${ai.recommended_pack_code}`);
-        err.status = 503;
-        throw err;
+        selected = pickDeterministicFallbackPack(score, packs);
+        reason = "Recommended using fallback scoring while AI is temporarily unavailable.";
     }
     const recommendation = {
         guest_id: guestId,
@@ -879,7 +956,7 @@ export const recommendForGuest = async (guestId) => {
             pack_name: selected.pack_name,
             nb_rooms: selected.nb_rooms,
             services: parseCsvList(selected.service_names),
-            reason: ai.reason,
+            reason,
         },
     };
     return recommendation;

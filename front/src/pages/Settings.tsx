@@ -113,6 +113,12 @@ const defaultInstructionSettings: InstructionSettings = {
     "Merci de vous connecter 10 minutes avant la session.",
     "Tout comportement irrespectueux entraîne l'exclusion immédiate.",
   ],
+  steps: [
+    { step: 1, title: "Créer un compte Epic Games", description: "Créez un compte sur la plateforme Epic Games pour accéder aux services." },
+    { step: 2, title: "Télécharger TalentVerse", description: "Téléchargez l'application TalentVerse depuis le lien fourni." },
+    { step: 3, title: "S'inscrire et choisir un avatar", description: "Créer son profil, sélectionner un avatar et personnaliser son apparence." },
+    { step: 4, title: "Cliquer sur \"Rejoindre la session\"", description: "L'invité rejoint directement la session et est prêt à participer." },
+  ],
   supportEmail: "support@talentverse.io",
   chatbotLink: "https://chat.talentverse.io/support",
   calendarLink: "https://calendly.com/talentverse/session-decouverte",
@@ -122,6 +128,8 @@ const defaultInstructionSettings: InstructionSettings = {
   days: ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"],
   fromHour: "12h00",
   toHour: "18h00",
+  startDate: "",
+  endDate: "",
 };
 
 const loadInstructionSettings = (): InstructionSettings => {
@@ -139,6 +147,8 @@ const loadInstructionSettings = (): InstructionSettings => {
         ? parsed.rules.map((rule) => String(rule)).filter((rule) => rule.trim().length > 0)
         : defaultInstructionSettings.rules,
       days: Array.isArray(parsed.days) && parsed.days.length ? parsed.days : defaultInstructionSettings.days,
+      startDate: String(parsed.startDate ?? defaultInstructionSettings.startDate),
+      endDate: String(parsed.endDate ?? defaultInstructionSettings.endDate),
     };
   } catch {
     return defaultInstructionSettings;
@@ -176,6 +186,7 @@ type NotificationState = {
 type InstructionSettings = {
   presentation: string;
   rules: string[];
+  steps: InstructionStep[];
   supportEmail: string;
   chatbotLink: string;
   calendarLink: string;
@@ -184,6 +195,13 @@ type InstructionSettings = {
   days: string[];
   fromHour: string;
   toHour: string;
+  startDate: string;
+  endDate: string;
+};
+type InstructionStep = {
+  step: number;
+  title: string;
+  description: string;
 };
 type GuestInstructionApiPayload = {
   presentation: string;
@@ -191,11 +209,15 @@ type GuestInstructionApiPayload = {
   start_time: string;
   end_time: string;
   calendar_link: string;
+  download_link?: string;
+  epic_account_link?: string;
   steps: Array<{ step: number; title: string; description: string }>;
   rules: Array<{ position: number; rule: string }>;
   services: string[];
   support_email: string;
   chatbot_link: string;
+  start_date?: string;
+  end_date?: string;
 };
 const toHourLabel = (value: string): string => {
   const normalized = String(value ?? "").trim();
@@ -213,6 +235,14 @@ const toApiTime = (value: string): string => {
   if (normalized.includes(":")) return normalized;
   const [hours, minutes = "00"] = normalized.split("h");
   return `${String(hours).padStart(2, "0")}:${String(minutes || "00").padStart(2, "0")}`;
+};
+
+const formatDisplayDate = (value: string): string => {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return "";
+  const [year, month, day] = normalized.split("-");
+  if (!year || !month || !day) return normalized;
+  return `${day}/${month}/${year}`;
 };
 
 type RolePermission = {
@@ -287,10 +317,28 @@ function getPasswordStrength(password: string): number {
 }
 
 export default function Settings() {
+  
   const [activeSection, setActiveSection] = useState<SettingsSection>("profile");
   const [roleServiceAccess, setRoleServiceAccess] = useState<RoleServiceAccess>(initialAccessControl.roleServiceAccess);
   const [roles, setRoles] = useState<Role[]>(initialAccessControl.roles);
-  const [services, setServices] = useState<Service[]>(initialAccessControl.services);
+  const [services, setServices] = useState<string[]>([]);
+  const [instructionServices, setInstructionServices] = useState<string[]>([]);
+
+  const loadServices = () => {
+    return fetch("http://localhost:5000/api/instruction-services")
+      .then((res) => res.json())
+      .then((data) => {
+        const formatted = data.map((s: any) => s.service_name);
+        console.log("SERVICES FROM DB:", formatted);
+        setInstructionServices(formatted);
+      })
+      .catch((err) => console.error(err));
+  };
+
+  useEffect(() => {
+    loadServices();
+  }, []);
+
   const [serviceIdByName, setServiceIdByName] = useState<Record<string, string>>({});
   const [defaultRoleIds, setDefaultRoleIds] = useState<Set<string>>(new Set(["guest", "client", "partenaire"]));
   const [hasLoadedAccessFromApi, setHasLoadedAccessFromApi] = useState<boolean>(false);
@@ -310,6 +358,7 @@ export default function Settings() {
   const [hasLoadedLeadScoringFromApi, setHasLoadedLeadScoringFromApi] = useState<boolean>(false);
   const [instructionSettings, setInstructionSettings] = useState<InstructionSettings>(loadInstructionSettings());
   const [instructionSaved, setInstructionSaved] = useState<boolean>(false);
+  const [isInstructionSaving, setIsInstructionSaving] = useState<boolean>(false);
   const [newInstructionRule, setNewInstructionRule] = useState<string>("");
   const [profileForm, setProfileForm] = useState<ProfileFormState>({
     fullName: "Admin TalentVerse",
@@ -340,41 +389,74 @@ export default function Settings() {
 
   const passwordStrength = useMemo(() => getPasswordStrength(profileForm.newPassword), [profileForm.newPassword]);
 
-  useEffect(() => {
-    window.localStorage.setItem(instructionStorageKey, JSON.stringify(instructionSettings));
-  }, [instructionSettings]);
-
-  const toFallbackServiceId = (serviceName: string) =>
-    serviceName
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "");
-
-  const buildAdminAccessPayload = (): AdminAccessMatrixPayload => {
-    const apiServices: AdminAccessService[] = services.map((serviceName) => ({
-      id: serviceIdByName[serviceName] ?? (toFallbackServiceId(serviceName) || `service_${Date.now()}`),
-      name: serviceName,
-    }));
-
-    const matrixByRoleAndServiceId: Record<string, Record<string, boolean>> = {};
-    for (const role of roles) {
-      matrixByRoleAndServiceId[role.id] = {};
-      for (const service of apiServices) {
-        matrixByRoleAndServiceId[role.id][service.id] = Boolean(roleServiceAccess[role.id]?.[service.name]);
-      }
+  const formatTimeForInput = (value: string): string => {
+    const normalized = String(value ?? "").trim();
+    if (!normalized) return "";
+    if (normalized.includes("h")) {
+      return normalized.replace("h", ":").slice(0, 5);
     }
-
-    return {
-      roles: roles.map((role) => ({
-        id: role.id,
-        name: role.name,
-        isDefault: defaultRoleIds.has(role.id),
-      })),
-      services: apiServices,
-      matrix: matrixByRoleAndServiceId,
-    };
+    return normalized.slice(0, 5);
   };
+
+const toFallbackServiceId = (serviceName: string) =>
+  serviceName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+const buildAdminAccessPayload = (): AdminAccessMatrixPayload => {
+  const apiServices: AdminAccessService[] = services.map((serviceName) => ({
+    id:
+      serviceIdByName[serviceName] ??
+      (toFallbackServiceId(serviceName) || `service_${Date.now()}`),
+    name: serviceName,
+  }));
+
+  const matrixByRoleAndServiceId: Record<string, Record<string, boolean>> = {};
+
+  for (const role of roles) {
+    matrixByRoleAndServiceId[role.id] = {};
+    for (const service of apiServices) {
+      matrixByRoleAndServiceId[role.id][service.id] = Boolean(
+        roleServiceAccess[role.id]?.[service.name]
+      );
+    }
+  }
+  // récupérer services activés pour guest
+  const guestRoleId = "guest"; //change si ton role est "Guest"
+
+  const selectedServiceIds = apiServices
+    .filter((service) => matrixByRoleAndServiceId[guestRoleId]?.[service.id])
+    .map((service) => service.id);
+
+  fetch("http://localhost:5000/api/instruction-services", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      services: selectedServiceIds,
+    }),
+  })
+    .then((res) => {
+      if (!res.ok) {
+        throw new Error(`Unable to update instruction services (${res.status})`);
+      }
+      return loadServices();
+    })
+    .catch((err) => console.error("Update services error:", err));
+
+  return {
+    roles: roles.map((role) => ({
+      id: role.id,
+      name: role.name,
+      isDefault: defaultRoleIds.has(role.id),
+    })),
+    services: apiServices,
+    matrix: matrixByRoleAndServiceId,
+  };
+};
 
   const persistAccessMatrixToApi = async () => {
     const payload = buildAdminAccessPayload();
@@ -824,6 +906,36 @@ export default function Settings() {
     setNewInstructionRule("");
   };
 
+  const updateInstructionStep = (index: number, field: "title" | "description", value: string) => {
+    setInstructionSettings((prev) => ({
+      ...prev,
+      steps: prev.steps.map((step, idx) =>
+        idx === index ? { ...step, [field]: value } : step
+      ),
+    }));
+  };
+
+  const removeInstructionStep = (index: number) => {
+    setInstructionSettings((prev) => ({
+      ...prev,
+      steps: prev.steps.filter((_, idx) => idx !== index),
+    }));
+  };
+
+  const addInstructionStep = () => {
+    setInstructionSettings((prev) => ({
+      ...prev,
+      steps: [
+        ...prev.steps,
+        {
+          step: prev.steps.length > 0 ? (Math.max(...prev.steps.map((s) => s.step)) + 1) : 1,
+          title: "",
+          description: "",
+        },
+      ],
+    }));
+  };
+
   const resetInstructionSheet = () => {
     setInstructionSettings(defaultInstructionSettings);
     setNewInstructionRule("");
@@ -831,20 +943,22 @@ export default function Settings() {
 
   const saveInstructionSheet = () => {
     const execute = async () => {
-      const steps = [
-        { step: 1, title: "Créer un compte Epic Games", description: "Guide Epic Games" },
-        { step: 2, title: "Télécharger TalentVerse", description: instructionSettings.downloadLink },
-        { step: 3, title: "S'inscrire et choisir un avatar", description: "Créer son profil, sélectionner un avatar et personnaliser son apparence." },
-        { step: 4, title: "Cliquer sur \"Rejoindre la session\"", description: "L'invité rejoint directement la session et est prêt à participer." },
-      ];
+      setIsInstructionSaving(true);
 
-      const payload: Omit<GuestInstructionApiPayload, "services"> = {
+      const payload: Omit<GuestInstructionApiPayload, "services"> & {
+        download_link: string;
+        epic_account_link: string;
+      } = {
         presentation: instructionSettings.presentation,
         available_days: instructionSettings.days,
+        start_date: instructionSettings.startDate,
+        end_date: instructionSettings.endDate,
         start_time: toApiTime(instructionSettings.fromHour),
         end_time: toApiTime(instructionSettings.toHour),
         calendar_link: instructionSettings.calendarLink,
-        steps,
+        download_link: instructionSettings.downloadLink,
+        epic_account_link: instructionSettings.epicAccountLink,
+        steps: instructionSettings.steps,
         rules: instructionSettings.rules
           .map((rule, index) => ({ position: index + 1, rule: String(rule).trim() }))
           .filter((row) => row.rule.length > 0),
@@ -852,8 +966,14 @@ export default function Settings() {
         chatbot_link: instructionSettings.chatbotLink,
       };
 
-      const res = await fetch("/api/guest-instruction", {
-        method: "PUT",
+      console.log("instructionSettings", instructionSettings);
+      console.log("save payload", payload);
+
+      window.localStorage.setItem(instructionStorageKey, JSON.stringify(instructionSettings));
+
+      console.log("PAYLOAD SEND:", payload);
+      const res = await fetch("/api/instruction", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
@@ -871,12 +991,14 @@ export default function Settings() {
     void execute().catch((error) => {
       const message = error instanceof Error ? error.message : "Unable to save instruction settings";
       toast.error(message, { duration: 2600, position: "bottom-right" });
+    }).finally(() => {
+      setIsInstructionSaving(false);
     });
   };
 
   const hydrateInstructionFromApi = async () => {
     try {
-      const res = await fetch("/api/guest-instruction");
+      const res = await fetch("/api/instruction");
       if (!res.ok) return;
 
       const payload = (await res.json()) as GuestInstructionApiPayload;
@@ -889,18 +1011,33 @@ export default function Settings() {
             .filter(Boolean)
         : [];
 
+      const steps = Array.isArray(payload.steps)
+        ? payload.steps
+            .map((step) => ({
+              step: Number(step.step) || 1,
+              title: String(step.title ?? "").trim(),
+              description: String(step.description ?? "").trim(),
+            }))
+            .filter((step) => step.title.length > 0)
+        : [];
+
       setInstructionSettings((prev) => ({
         ...prev,
         presentation: String(payload.presentation ?? "").trim() || prev.presentation,
         rules: rules.length ? rules : prev.rules,
+        steps: steps.length ? steps : prev.steps,
         supportEmail: String(payload.support_email ?? "").trim() || prev.supportEmail,
         chatbotLink: String(payload.chatbot_link ?? "").trim() || prev.chatbotLink,
         calendarLink: String(payload.calendar_link ?? "").trim() || prev.calendarLink,
+        downloadLink: String(payload.download_link ?? "").trim() || prev.downloadLink,
+        epicAccountLink: String(payload.epic_account_link ?? "").trim() || prev.epicAccountLink,
         days: Array.isArray(payload.available_days) && payload.available_days.length
           ? payload.available_days.map((day) => String(day))
           : prev.days,
         fromHour: toHourLabel(String(payload.start_time ?? "")) || prev.fromHour,
         toHour: toHourLabel(String(payload.end_time ?? "")) || prev.toHour,
+        startDate: String(payload.start_date ?? "").trim() || prev.startDate,
+        endDate: String(payload.end_date ?? "").trim() || prev.endDate,
       }));
     } catch {
       // fallback to local/default state when backend data is unavailable
@@ -1379,16 +1516,9 @@ export default function Settings() {
                         Ces services sont définis automatiquement depuis la base de données selon le rôle guest. Ils ne peuvent pas être modifiés manuellement ici.
                       </p>
                       <div className="flex flex-wrap gap-2">
-                        {[
-                          "Explorer les compétences",
-                          "Rejoindre une session publique",
-                          "Consulter les profils talents",
-                          "Accès à la démo XR",
-                          "Chat communautaire",
-                          "Voir les offres d'emploi",
-                        ].map((service) => (
+                        {instructionServices.map((service, index) => (
                           <span
-                            key={service}
+                            key={index}
                             className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700"
                           >
                             {service}
@@ -1407,101 +1537,88 @@ export default function Settings() {
                     </span>
                   </div>
                   <div className="p-5">
-                    <label className="mb-2 block text-sm font-medium text-slate-700">Jours disponibles</label>
-                    <div className="flex flex-wrap gap-2">
-                      {defaultInstructionSettings.days.map((day) => {
-                        const active = instructionSettings.days.includes(day);
-                        return (
-                          <button
-                            key={day}
-                            type="button"
-                            onClick={() => toggleInstructionDay(day)}
-                            className={`rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
-                              active
-                                ? "border-indigo-200 bg-indigo-50 text-indigo-700"
-                                : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
-                            }`}
-                          >
-                            {day}
-                          </button>
-                        );
-                      })}
+                    <div className="mt-5 grid gap-4 md:grid-cols-2">
+                      <div>
+                        <label className="mb-2 block text-sm font-medium text-slate-700" htmlFor="instruction-start-date">Date de début</label>
+                        <input
+                          id="instruction-start-date"
+                          name="startDate"
+                          type="date"
+                          value={instructionSettings.startDate}
+                          onChange={(event) =>
+                            setInstructionSettings((prev) => ({
+                              ...prev,
+                              startDate: event.target.value,
+                            }))
+                          }
+                          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-2 block text-sm font-medium text-slate-700" htmlFor="instruction-end-date">Date de fin</label>
+                        <input
+                          id="instruction-end-date"
+                          name="endDate"
+                          type="date"
+                          value={instructionSettings.endDate}
+                          onChange={(event) =>
+                            setInstructionSettings((prev) => ({
+                              ...prev,
+                              endDate: event.target.value,
+                            }))
+                          }
+                          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
                     </div>
 
                     <div className="mt-5 grid gap-4 md:grid-cols-2">
                       <div>
                         <label className="mb-2 block text-sm font-medium text-slate-700">Heure de début</label>
-                        <select
-                          value={instructionSettings.fromHour}
+                        <input
+                          type="time"
+                          value={formatTimeForInput(instructionSettings.fromHour)}
                           onChange={(event) =>
                             setInstructionSettings((prev) => ({
                               ...prev,
-                              fromHour: event.target.value,
+                              fromHour: toHourLabel(event.target.value),
                             }))
                           }
                           className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        >
-                          {[
-                            "08h00",
-                            "09h00",
-                            "10h00",
-                            "11h00",
-                            "12h00",
-                            "13h00",
-                            "14h00",
-                            "15h00",
-                          ].map((hour) => (
-                            <option key={hour} value={hour}>{hour}</option>
-                          ))}
-                        </select>
+                        />
                       </div>
                       <div>
                         <label className="mb-2 block text-sm font-medium text-slate-700">Heure de fin</label>
-                        <select
-                          value={instructionSettings.toHour}
+                        <input
+                          type="time"
+                          value={formatTimeForInput(instructionSettings.toHour)}
                           onChange={(event) =>
                             setInstructionSettings((prev) => ({
                               ...prev,
-                              toHour: event.target.value,
+                              toHour: toHourLabel(event.target.value),
                             }))
                           }
                           className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        >
-                          {[
-                            "13h00",
-                            "14h00",
-                            "15h00",
-                            "16h00",
-                            "17h00",
-                            "18h00",
-                            "19h00",
-                            "20h00",
-                          ].map((hour) => (
-                            <option key={hour} value={hour}>{hour}</option>
-                          ))}
-                        </select>
+                        />
                       </div>
                     </div>
 
-                    <div className="mt-5 grid gap-4 md:grid-cols-2">
+                    <div className="mt-5">
                       <div>
-                        <label className="mb-2 block text-sm font-medium text-slate-700">Lien calendrier (Calendly)</label>
-                        <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
-                          <CalendarDays className="h-4 w-4 shrink-0 text-slate-500" />
-                          <input
-                            type="url"
-                            value={instructionSettings.calendarLink}
-                            onChange={(event) =>
-                              setInstructionSettings((prev) => ({
-                                ...prev,
-                                calendarLink: event.target.value,
-                              }))
-                            }
-                            className="w-full border-0 bg-transparent p-0 text-sm text-slate-700 focus:outline-none focus:ring-0"
-                          />
-                        </div>
+                        <label className="mb-2 block text-sm font-medium text-slate-700">Lien téléchargement</label>
+                        <Input
+                          type="url"
+                          value={instructionSettings.downloadLink}
+                          onChange={(event) =>
+                            setInstructionSettings((prev) => ({
+                              ...prev,
+                              downloadLink: event.target.value,
+                            }))
+                          }
+                        />
                       </div>
                     </div>
+
                   </div>
                 </div>
 
@@ -1517,64 +1634,54 @@ export default function Settings() {
                       Ces étapes sont affichées dans l&apos;email envoyé à l&apos;invité pour l&apos;aider à se connecter à la plateforme.
                     </p>
 
-                    {[1, 2, 3, 4].map((step) => (
-                      <div key={step} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                        {step === 1 ? (
-                          <div className="flex items-start gap-3">
-                            <span className="mt-0.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700">1</span>
+                    {instructionSettings.steps.map((step, index) => (
+                      <div key={`step-${index}`} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="flex items-start gap-3">
+                          <span className="mt-0.5 inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700">
+                            {step.step}
+                          </span>
+                          <div className="w-full space-y-3">
                             <div>
-                              <p className="text-sm font-semibold text-slate-900">Créer un compte Epic Games</p>
-                              <a href={instructionSettings.epicAccountLink} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-2 text-sm text-indigo-700 hover:underline">
-                                <ExternalLink className="h-3.5 w-3.5" /> Guide Epic Games
-                              </a>
+                              <label className="mb-2 block text-xs font-medium text-slate-700">Titre de l&apos;étape</label>
+                              <input
+                                type="text"
+                                value={step.title}
+                                onChange={(event) => updateInstructionStep(index, "title", event.target.value)}
+                                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                placeholder="Titre de l'étape"
+                              />
                             </div>
-                          </div>
-                        ) : null}
-
-                        {step === 2 ? (
-                          <div className="flex items-start gap-3">
-                            <span className="mt-0.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700">2</span>
-                            <div className="w-full">
-                              <p className="text-sm font-semibold text-slate-900">Télécharger TalentVerse</p>
-                              <div className="mt-2 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
-                                <span>⬇</span>
-                                <input
-                                  type="url"
-                                  value={instructionSettings.downloadLink}
-                                  onChange={(event) =>
-                                    setInstructionSettings((prev) => ({
-                                      ...prev,
-                                      downloadLink: event.target.value,
-                                    }))
-                                  }
-                                  className="w-full border-0 bg-transparent p-0 focus:outline-none focus:ring-0"
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        ) : null}
-
-                        {step === 3 ? (
-                          <div className="flex items-start gap-3">
-                            <span className="mt-0.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700">3</span>
                             <div>
-                              <p className="text-sm font-semibold text-slate-900">S&apos;inscrire et choisir un avatar</p>
-                              <p className="mt-1 text-sm text-slate-600">Créer son profil, sélectionner un avatar et personnaliser son apparence.</p>
+                              <label className="mb-2 block text-xs font-medium text-slate-700">Description</label>
+                              <Textarea
+                                value={step.description}
+                                onChange={(event) => updateInstructionStep(index, "description", event.target.value)}
+                                className="min-h-[80px] rounded-lg border-slate-200 bg-white text-sm text-slate-900 focus-visible:ring-indigo-500"
+                                placeholder="Description textuelle de cette étape"
+                              />
+                              <div className="mt-2 text-right text-xs text-slate-400">{step.description.length} caractères</div>
+                            </div>
+                            <div className="flex justify-end gap-2 border-t border-slate-200 pt-3">
+                              <button
+                                type="button"
+                                onClick={() => removeInstructionStep(index)}
+                                className="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-100"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" /> Supprimer
+                              </button>
                             </div>
                           </div>
-                        ) : null}
-
-                        {step === 4 ? (
-                          <div className="flex items-start gap-3">
-                            <span className="mt-0.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700">4</span>
-                            <div>
-                              <p className="text-sm font-semibold text-slate-900">Cliquer sur "Rejoindre la session"</p>
-                              <p className="mt-1 text-sm text-slate-600">L&apos;invité rejoint directement la session et est prêt à participer.</p>
-                            </div>
-                          </div>
-                        ) : null}
+                        </div>
                       </div>
                     ))}
+
+                    <button
+                      type="button"
+                      onClick={addInstructionStep}
+                      className="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-dashed border-slate-300 py-3 text-sm font-medium text-slate-600 hover:border-slate-400 hover:bg-slate-50"
+                    >
+                      <Plus className="h-4 w-4" /> Ajouter une étape
+                    </button>
                   </div>
                 </div>
 
@@ -1659,6 +1766,7 @@ export default function Settings() {
                       <div>
                         <label className="mb-1 block text-xs text-slate-500">Email support</label>
                         <Input
+                          type="email"
                           value={instructionSettings.supportEmail}
                           onChange={(event) =>
                             setInstructionSettings((prev) => ({
@@ -1671,6 +1779,7 @@ export default function Settings() {
                       <div>
                         <label className="mb-1 block text-xs text-slate-500">Lien chatbot</label>
                         <Input
+                          type="url"
                           value={instructionSettings.chatbotLink}
                           onChange={(event) =>
                             setInstructionSettings((prev) => ({
@@ -1682,9 +1791,11 @@ export default function Settings() {
                       </div>
                     </div>
 
-                    <div className="mt-5 flex justify-end gap-3">
+                    <div className="mt-5 flex flex-col items-end gap-3 sm:flex-row">
                       <Button variant="outline" onClick={resetInstructionSheet}>Annuler</Button>
-                      <Button onClick={saveInstructionSheet}>{instructionSaved ? "Sauvegardé" : "Sauvegarder"}</Button>
+                      <Button onClick={saveInstructionSheet} disabled={isInstructionSaving}>
+                        {isInstructionSaving ? "Enregistrement..." : instructionSaved ? "Sauvegardé" : "Sauvegarder"}
+                      </Button>
                     </div>
                   </div>
                 </div>

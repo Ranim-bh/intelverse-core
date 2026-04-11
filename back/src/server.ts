@@ -2,8 +2,10 @@ import express from "express";
 import type { Request, Response } from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { randomUUID } from "crypto";
+import { randomUUID, randomBytes } from "crypto";
 import Groq from "groq-sdk";
+import nodemailer from "nodemailer";
+import crypto from "crypto";
 import {
   loadDataset as loadTable,
   loadDatasets as loadTables,
@@ -33,6 +35,12 @@ app.use(express.json());
 
 const GROQ_API_KEY = (process.env.GROQ_API_KEY ?? "").trim();
 const SERVICES_TABLE_KEY = (process.env.SERVICES_TABLE_KEY ?? "services").trim().toLowerCase();
+const SMTP_HOST = (process.env.EMAIL_HOST ?? "").trim();
+const SMTP_PORT = Number(process.env.EMAIL_PORT ?? 587);
+const SMTP_SECURE = (process.env.EMAIL_SECURE ?? "false").toLowerCase() === "true";
+const SMTP_USER = (process.env.EMAIL_USER ?? "").trim();
+const SMTP_PASS = (process.env.EMAIL_PASS ?? "").trim();
+const EMAIL_FROM = (process.env.EMAIL_FROM ?? SMTP_USER).trim();
 const groq = new Groq({ apiKey: GROQ_API_KEY });
 
 type TableRow = Record<string, unknown>;
@@ -111,9 +119,13 @@ type GuestInstructionRule = {
 type GuestInstructionPayload = {
   presentation: string;
   available_days: string[];
+  start_date?: string;
+  end_date?: string;
   start_time: string;
   end_time: string;
   calendar_link: string;
+  download_link?: string;
+  epic_account_link?: string;
   steps: GuestInstructionStep[];
   rules: GuestInstructionRule[];
   services: string[];
@@ -243,6 +255,309 @@ const normalizeLeadRequestStatus = (value: unknown): LeadRequestStatus => {
   const raw = String(value ?? "").trim().toLowerCase();
   if (raw === "accepted" || raw === "denied") return raw;
   return "pending";
+};
+
+const escapeHtml = (value: unknown): string => {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+};
+
+const toDateLabel = (date: string): string => {
+  if (!date) return "--/--/----";
+  const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return date;
+  return `${match[3]}/${match[2]}/${match[1]}`;
+};
+
+const buildInstructionEmail = (settings: GuestInstructionPayload, token?: string): string => {
+  const days = Array.isArray(settings.available_days)
+    ? settings.available_days.map(escapeHtml).join(", ")
+    : "N/A";
+
+  const availability = `${escapeHtml(settings.start_time)} - ${escapeHtml(settings.end_time)}`;
+  const downloadUrl = token
+    ? `http://localhost:8080/download?token=${encodeURIComponent(token)}`
+    : "";
+
+  const stepsHtml = Array.isArray(settings.steps) && settings.steps.length
+    ? `<ol style="margin:0; padding:0; counter-reset:step; list-style:none;">${settings.steps.map((step) => `
+      <li style="margin-bottom:20px; padding:16px; background:#f9fafb; border-radius:8px; display:flex; gap:14px; align-items:flex-start;">
+        <div style="flex-shrink:0; width:32px; height:32px; background:#dc2626; color:#ffffff; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:14px;">${escapeHtml(String(step.step))}</div>
+        <div>
+          <h4 style="margin:0 0 6px; font-size:15px; font-weight:700; color:#e53935;">${escapeHtml(step.title)}</h4>
+          <p style="margin:0; font-size:13px; color:#374151; line-height:1.6;">${escapeHtml(step.description)}</p>
+        </div>
+      </li>`).join("")}</ol>`
+    : `<p style="color:#6b7280; font-size:13px;">Aucune étape définie.</p>`;
+
+  return `<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Accédez à TalentVerse</title>
+  </head>
+  <body style="font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; margin:0; padding:0; background:#f3f4f6; color:#1f2937;">
+    <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background:#f3f4f6;">
+      <tr>
+        <td align="center" style="padding:40px 20px;">
+          <table width="100%" maxwidth="600" cellpadding="0" cellspacing="0" role="presentation" style="max-width:600px; background:#ffffff; border-radius:12px; overflow:hidden; box-shadow:0 10px 40px rgba(0,0,0,0.08);">
+            <!-- Red Header -->
+            <tr>
+              <td style="background:linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); padding:40px 32px; text-align:center;">
+                <h1 style="margin:0; font-size:32px; font-weight:700; color:#ffffff;">Bienvenue sur TalentVerse</h1>
+              </td>
+            </tr>
+
+            <!-- Content -->
+            <tr>
+              <td style="padding:40px 32px;">
+                <!-- Introduction -->
+                <div style="margin-bottom:32px;">
+                  <p style="margin:0; font-size:15px; line-height:1.8; color:#374151;">${escapeHtml(settings.presentation)}</p>
+                </div>
+
+                <!-- Session Duration Section -->
+                ${settings.start_date && settings.end_date ? `
+                <div style="margin-bottom:32px; padding:20px; background:#f9fafb; border-left:4px solid #dc2626; border-radius:8px;">
+                  <h3 style="margin:0 0 12px; font-size:14px; font-weight:700; color:#1f2937;">📅 Session Duration</h3>
+                  <p style="margin:0 0 6px; font-size:14px; color:#374151;">Start: ${toDateLabel(settings.start_date)} at ${escapeHtml(settings.start_time)}</p>
+                  <p style="margin:0; font-size:14px; color:#374151;">End: ${toDateLabel(settings.end_date)} at ${escapeHtml(settings.end_time)}</p>
+                </div>
+                ` : ""}
+
+                <!-- Availability Section -->
+                <div style="margin-bottom:32px; padding:20px; background:#f9fafb; border-left:4px solid #dc2626; border-radius:8px;">
+                  <h3 style="margin:0 0 12px; font-size:14px; font-weight:700; color:#1f2937; text-transform:uppercase; letter-spacing:0.5px;">Disponibilités</h3>
+                  <div style="margin-bottom:8px;">
+                    <span style="font-weight:600; color:#1f2937;">Jours :</span>
+                    <span style="color:#374151;"> ${days}</span>
+                  </div>
+                  <div>
+                    <span style="font-weight:600; color:#1f2937;">Heures :</span>
+                    <span style="color:#374151;"> ${availability}</span>
+                  </div>
+                  ${settings.calendar_link ? `<div style="margin-top:12px;"><strong>Calendrier :</strong> <a href="${escapeHtml(settings.calendar_link)}" style="color:#dc2626; text-decoration:none;">${escapeHtml(settings.calendar_link)}</a></div>` : ""}
+                </div>
+
+                <!-- Steps Section -->
+                <div style="margin-bottom:32px;">
+                  <h3 style="margin:0 0 16px; font-size:14px; font-weight:700; color:#dc2626; text-transform:uppercase; letter-spacing:0.5px;">Étapes pour accéder à TalentVerse</h3>
+                  ${stepsHtml}
+                </div>
+
+                <!-- Secure Download Link -->
+                ${downloadUrl ? `
+                <div style="margin-bottom:32px; padding:20px; background:#ffffff; border:1px solid #e5e7eb; border-radius:8px;">
+                  <p style="margin:0 0 8px; font-size:13px; color:#6b7280;">Use the secure download link below after accepting the rules in the platform:</p>
+                  <p style="margin:0; font-size:13px; line-height:1.6; word-break:break-all; color:#dc2626;">${escapeHtml(downloadUrl)}</p>
+                </div>
+                ` : ""}
+
+                <!-- Support Section -->
+                <div style="padding:20px; background:#f0fdf4; border:1px solid #dcfce7; border-radius:8px;">
+                  <h3 style="margin:0 0 12px; font-size:14px; font-weight:700; color:#166534; text-transform:uppercase; letter-spacing:0.5px;">Contact & Support</h3>
+                  <div style="font-size:14px; color:#374151;">
+                    ${settings.support_email ? `<div style="margin-bottom:8px;"><strong>Email :</strong> ${escapeHtml(settings.support_email)}</div>` : ""}
+                    ${settings.chatbot_link ? `<div><strong>Chat :</strong> ${escapeHtml(settings.chatbot_link)}</div>` : ""}
+                  </div>
+                </div>
+
+                <!-- Closing Message -->
+                <div style="margin-top:32px; padding-top:32px; border-top:1px solid #e5e7eb; text-align:center;">
+                  <p style="margin:0; font-size:13px; color:#6b7280; line-height:1.6;">Connectez-vous à la plateforme pour accepter les règles et accéder à TalentVerse.</p>
+                </div>
+              </td>
+            </tr>
+
+            <!-- Footer -->
+            <tr>
+              <td style="padding:20px 32px; background:#f9fafb; border-top:1px solid #e5e7eb; text-align:center;">
+                <p style="margin:0; font-size:12px; color:#9ca3af;">© 2026 TalentVerse. Tous droits réservés.</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+};
+
+const buildInstructionText = (settings: GuestInstructionPayload, token?: string): string => {
+  const days = Array.isArray(settings.available_days) ? settings.available_days.join(", ") : "N/A";
+  const rulesText = Array.isArray(settings.rules) && settings.rules.length
+    ? settings.rules.map((rule) => `- ${rule.rule}`).join("\n")
+    : "Aucune règle définie.";
+
+  const stepsText = Array.isArray(settings.steps) && settings.steps.length
+    ? settings.steps.map((step) => `${step.step}. ${step.title} - ${step.description}`).join("\n")
+    : "Aucune étape définie.";
+
+  const downloadUrl = token
+    ? `http://localhost:8080/download?token=${encodeURIComponent(token)}`
+    : "";
+
+  return [
+    settings.presentation,
+    "",
+    `Disponibilités : ${days}`,
+    `Heures : ${settings.start_time} - ${settings.end_time}`,
+    "",
+    `Calendrier : ${settings.calendar_link}`,
+    downloadUrl ? `Lien sécurisé : ${downloadUrl}` : "",
+    settings.epic_account_link ? `Compte Epic Games : ${settings.epic_account_link}` : "",
+    "",
+    "Étapes :",
+    stepsText,
+    "",
+    "Règles :",
+    rulesText,
+    "",
+    `Support email : ${settings.support_email}`,
+    `Chatbot : ${settings.chatbot_link}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+};
+
+const getEmailTransporter = () => {
+  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS || !EMAIL_FROM) {
+    throw new Error("Missing SMTP email configuration");
+  }
+
+  return nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_SECURE,
+    auth: {
+      user: SMTP_USER,
+      pass: SMTP_PASS,
+    },
+  });
+};
+
+const sendInstructionEmail = async (userEmail: string): Promise<void> => {
+  const trimmedEmail = String(userEmail ?? "").trim();
+  if (!trimmedEmail) {
+    throw new Error("Missing recipient email address");
+  }
+
+  const settings = await buildGuestInstructionPayload();
+  if (!settings) {
+    throw new Error("Unable to load instruction settings for email");
+  }
+
+const token = crypto.randomBytes(20).toString("hex");
+
+await queryDb(
+  "UPDATE users SET download_token = $1 WHERE email = $2",
+  [token, trimmedEmail]
+);
+
+const BASE_URL = process.env.FRONT_URL;
+const downloadUrl = `${BASE_URL}/download?token=${token}`;
+const servicesResult = await queryDb(`
+  SELECT service_name
+  FROM service
+  WHERE service_id IN (
+    SELECT UNNEST(selected_services)
+    FROM guest_instruction_settings
+    WHERE id = 1
+  )
+`);
+
+const serviceList = servicesResult.rows?.map((s: any) => s.service_name) || [];
+
+const servicesHtml = serviceList.length > 0 ? `
+  <h3 style="color:#e53935;">Services auxquels vous avez accès</h3>
+  <ul style="padding-left:20px;color:#444;">
+    ${serviceList.map(service => `<li>${service}</li>`).join("")}
+  </ul>
+` : "";
+console.log("START DATE:", settings.start_date);
+console.log("END DATE:", settings.end_date);
+console.log("START TIME:", settings.start_time);
+console.log("END TIME:", settings.end_time);
+const sessionHtml = (settings.start_date && settings.end_date) ? `
+  <div style="margin-top:20px;">
+    <h3 style="color:#e53935;">📅 Durée de la session</h3>
+
+    <p style="color:#444; margin:4px 0;">
+      <strong>Début Session :</strong> ${toDateLabel(settings.start_date)}
+    </p>
+
+    <p style="color:#444; margin:4px 0;">
+      <strong>Fin Session :</strong> ${toDateLabel(settings.end_date)}
+    </p>
+
+    <p style="color:#444; margin-top:8px;">
+      <strong>Horaires de la session :</strong> de ${settings.start_time} à ${settings.end_time}
+    </p>
+  </div>
+` : "";
+  const html = `
+    <div style="font-family:Arial;padding:20px;">
+      <h2 style="color:#e53935;">Bienvenue sur TalentVerse</h2>
+
+      <p>${settings.presentation}</p>
+      ${sessionHtml}
+      ${servicesHtml}
+    <h3 style="color:#e53935;">Étapes pour accéder à TalentVerse</h3>
+    <ol>
+    ${settings.steps
+    .map((s: any) => `
+      <li style="margin-bottom:10px;">
+        <strong>${s.title}</strong><br/>
+        <span style="color:#555;">${s.description}</span>
+      </li>
+    `)
+    .join("")}
+    </ol>
+
+      <br/>
+
+      <a href="${downloadUrl}"
+         style="display:inline-block;padding:12px 20px;background:#e53935;color:white;border-radius:8px;text-decoration:none;">
+         Télécharger TalentVerse
+      </a>
+    <div style="margin-top:30px;padding-top:15px;border-top:1px solid #eee;">
+      
+      <h3 style="color:#e53935;">💬 Support</h3>
+
+      <p style="color:#555;font-size:14px;">
+        Besoin d’aide ? Notre équipe est disponible pour vous accompagner.
+      </p>
+
+      <p style="margin:5px 0;">
+        📧 <strong>Email :</strong> ${settings.support_email}
+      </p>
+
+      <p style="margin:5px 0;">
+        🤖 <strong>Chat :</strong>
+        <a href="${settings.chatbot_link}" style="color:#e53935;text-decoration:none;">
+          Accéder au support
+        </a>
+      </p>
+
+    </div>
+    </div>
+  `;
+
+  const transporter = getEmailTransporter();
+
+  await transporter.sendMail({
+    from: EMAIL_FROM,
+    to: trimmedEmail,
+    subject: "Vos instructions TalentVerse",
+  
+    html,
+  });
+  console.log("EMAIL REAL FUNCTION 🔥");
 };
 
 const ensureLeadRequestsTable = async (): Promise<void> => {
@@ -385,6 +700,100 @@ const getTableColumns = async (tableName: string): Promise<Set<string>> => {
     [tableName]
   );
   return new Set(result.rows.map((row) => String(row.column_name).toLowerCase()));
+};
+
+const ensureUsersDownloadColumns = async (): Promise<void> => {
+  const tableExists = await queryDb<{ exists: boolean }>(
+    `
+    SELECT EXISTS(
+      SELECT 1 FROM information_schema.tables
+      WHERE table_schema='public' AND table_name='users'
+    ) AS exists
+  `
+  );
+
+  if (!tableExists.rows[0]?.exists) {
+    return;
+  }
+
+  const columns = await getTableColumns("users");
+  if (!columns.has("download_token")) {
+    await queryDb(`ALTER TABLE users ADD COLUMN download_token TEXT`);
+  }
+  if (!columns.has("rules_accepted")) {
+    await queryDb(`ALTER TABLE users ADD COLUMN rules_accepted BOOLEAN DEFAULT false`);
+  }
+};
+
+const generateDownloadToken = (length = 32): string => randomBytes(length).toString("hex");
+
+const updateUserDownloadToken = async (email: string, token: string): Promise<void> => {
+  await ensureUsersDownloadColumns();
+
+  await queryDb(
+    `UPDATE users SET download_token = $1, rules_accepted = false WHERE LOWER(email) = LOWER($2)`,
+    [token, email]
+  );
+};
+
+const getUserByToken = async (token: string) => {
+  const result = await queryDb<{ id: string; email: string; rules_accepted: boolean | null; }>(
+    `SELECT id, email, COALESCE(rules_accepted, false) AS rules_accepted FROM users WHERE download_token = $1 LIMIT 1`,
+    [token]
+  );
+  return result.rows[0] ?? null;
+};
+
+const setRulesAcceptedForToken = async (token: string): Promise<void> => {
+  await ensureUsersDownloadColumns();
+  await queryDb(`UPDATE users SET rules_accepted = true WHERE download_token = $1`, [token]);
+};
+
+const ensureGuestInstructionTables = async (): Promise<void> => {
+  await queryDb(`
+    CREATE TABLE IF NOT EXISTS guest_instruction_settings (
+      id SERIAL PRIMARY KEY,
+      presentation TEXT,
+      available_days TEXT[],
+      start_date DATE,
+      end_date DATE,
+      start_time TIME,
+      end_time TIME,
+      calendar_link TEXT,
+      download_link TEXT,
+      epic_account_link TEXT,
+      steps JSONB,
+      support_email TEXT,
+      chatbot_link TEXT,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await queryDb(`
+    CREATE TABLE IF NOT EXISTS guest_instruction_rules (
+      id SERIAL PRIMARY KEY,
+      setting_id INTEGER NOT NULL REFERENCES guest_instruction_settings(id) ON DELETE CASCADE,
+      rule TEXT NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0
+    )
+  `);
+
+  const columns = await getTableColumns("guest_instruction_settings");
+  if (!columns.has("download_link")) {
+    await queryDb(`ALTER TABLE guest_instruction_settings ADD COLUMN download_link TEXT`);
+  }
+  if (!columns.has("epic_account_link")) {
+    await queryDb(`ALTER TABLE guest_instruction_settings ADD COLUMN epic_account_link TEXT`);
+  }
+  if (!columns.has("start_date")) {
+    await queryDb(`ALTER TABLE guest_instruction_settings ADD COLUMN start_date DATE`);
+  }
+  if (!columns.has("end_date")) {
+    await queryDb(`ALTER TABLE guest_instruction_settings ADD COLUMN end_date DATE`);
+  }
+  if (!columns.has("updated_at")) {
+    await queryDb(`ALTER TABLE guest_instruction_settings ADD COLUMN updated_at TIMESTAMPTZ DEFAULT NOW()`);
+  }
 };
 
 const ensureAccessMatrixTables = async (): Promise<void> => {
@@ -649,6 +1058,17 @@ const ensureTables = async () => {
   return loadTables(true);
 };
 
+app.get("/api/datasets", async (_req, res) => {
+  try {
+    const datasets = await loadTables();
+    return res.json(datasets);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to load datasets";
+    console.error("/api/datasets error:", message);
+    return res.status(500).json({ error: message });
+  }
+});
+
 const extractJsonObject = (raw: string) => {
   const fenced = raw.replace(/```json|```/g, "").trim();
   try {
@@ -856,14 +1276,20 @@ const normalizeInstructionSteps = (value: unknown): GuestInstructionStep[] => {
 };
 
 const buildGuestInstructionPayload = async (settingId?: number): Promise<GuestInstructionPayload | null> => {
+  await ensureGuestInstructionTables();
+
   const settingsResult = settingId
     ? await queryDb<{
         id: number;
         presentation: string | null;
         available_days: string[] | null;
+        start_date: string | null; // 🔥 AJOUT
+        end_date: string | null;
         start_time: string | null;
         end_time: string | null;
         calendar_link: string | null;
+        download_link: string | null;
+        epic_account_link: string | null;
         steps: unknown;
         support_email: string | null;
         chatbot_link: string | null;
@@ -873,6 +1299,8 @@ const buildGuestInstructionPayload = async (settingId?: number): Promise<GuestIn
           id,
           presentation,
           available_days,
+          start_date::text AS start_date,
+          end_date::text AS end_date,
           start_time::text AS start_time,
           end_time::text AS end_time,
           calendar_link,
@@ -889,9 +1317,13 @@ const buildGuestInstructionPayload = async (settingId?: number): Promise<GuestIn
         id: number;
         presentation: string | null;
         available_days: string[] | null;
+        start_date: string | null;
+        end_date: string | null;
         start_time: string | null;
         end_time: string | null;
         calendar_link: string | null;
+        download_link: string | null;
+        epic_account_link: string | null;
         steps: unknown;
         support_email: string | null;
         chatbot_link: string | null;
@@ -900,6 +1332,8 @@ const buildGuestInstructionPayload = async (settingId?: number): Promise<GuestIn
           id,
           presentation,
           available_days,
+          start_date::text AS start_date,
+          end_date::text AS end_date,
           start_time::text AS start_time,
           end_time::text AS end_time,
           calendar_link,
@@ -937,9 +1371,13 @@ const buildGuestInstructionPayload = async (settingId?: number): Promise<GuestIn
   return {
     presentation: String(setting.presentation ?? "").trim(),
     available_days: Array.isArray(setting.available_days) ? setting.available_days.map((day) => String(day)) : [],
+    start_date: setting.start_date ?? "",
+end_date: setting.end_date ?? "",
     start_time: toHHMM(setting.start_time),
     end_time: toHHMM(setting.end_time),
     calendar_link: String(setting.calendar_link ?? "").trim(),
+    download_link: String(setting.download_link ?? "").trim(),
+    epic_account_link: String(setting.epic_account_link ?? "").trim(),
     steps: normalizeInstructionSteps(setting.steps),
     rules: rulesResult.rows.map((row, index) => ({
       position: Number(row.position ?? index + 1),
@@ -1260,7 +1698,6 @@ app.patch("/api/requests/:id/:status", async (req, res) => {
     if (!Number.isInteger(id) || id <= 0) {
       return res.status(400).json({ error: "Invalid request id" });
     }
-
     const statusParam = String(req.params.status ?? "").toLowerCase();
     const status = statusParam === "accept" ? "accepted" : statusParam === "deny" ? "denied" : null;
     if (!status) {
@@ -1369,6 +1806,13 @@ app.patch("/api/requests/:id/:status", async (req, res) => {
         sourceReferrer: updated.source_referrer,
         landingUrl: updated.landing_url,
       });
+
+      try {
+        await sendInstructionEmail(updated.email);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("Failed to send instruction email:", message);
+      }
     }
 
     return res.json(mapLeadRequestRow(updated));
@@ -1378,13 +1822,96 @@ app.patch("/api/requests/:id/:status", async (req, res) => {
   }
 });
 
-app.get("/api/datasets", async (_req, res) => {
+app.get("/api/instruction-services", async (_req, res) => {
   try {
-    const tables = await loadTables(true);
-    return res.json(tables);
+    const services = await queryDb(`
+      SELECT service_name
+      FROM service
+      WHERE service_id IN (
+        SELECT UNNEST(selected_services)
+        FROM guest_instruction_settings
+        WHERE id = 1
+      )
+    `);
+
+    res.json(services.rows);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to load datasets";
-    return res.status(500).json({ error: message });
+    console.error(error);
+    res.status(500).json({ error: "Failed to load services" });
+  }
+});
+
+app.put("/api/instruction-services", async (req, res) => {
+  try {
+    const { services } = req.body;
+
+    await queryDb(`
+      UPDATE guest_instruction_settings
+      SET selected_services = $1
+      WHERE id = 1
+    `, [services]);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to update services" });
+  }
+});
+
+app.get("/api/validate-download", async (req, res) => {
+  try {
+    const { token } = req.query;
+
+    if (!token) {
+      return res.status(400).json({ error: "Missing token" });
+    }
+
+    const result = await queryDb(
+      "SELECT * FROM users WHERE download_token = $1",
+      [token]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Invalid token" });
+    }
+
+    return res.json({ valid: true });
+  } catch (error) {
+    console.error("Validate download error:", error);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/api/accept-rules", async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({ error: "Missing token" });
+    }
+
+    // 🔥 mettre à jour acceptation
+    await queryDb(
+      "UPDATE users SET rules_accepted = true WHERE download_token = $1",
+      [token]
+    );
+
+    //récupérer lien de téléchargement
+    const settings = await queryDb(`
+      SELECT download_link FROM guest_instruction_settings LIMIT 1
+    `);
+
+    const downloadLink = settings.rows[0]?.download_link;
+    console.log("DOWNLOAD LINK:", downloadLink);
+
+    return res.json({
+      success: true,
+      downloadLink
+    });
+
+  } catch (error) {
+    console.error("Accept rules error:", error);
+    return res.status(500).json({ error: "Server error" });
   }
 });
 
@@ -1421,6 +1948,218 @@ app.get("/api/guest-instruction", async (_req, res) => {
   }
 });
 
+app.get("/api/instruction", async (_req, res) => {
+  try {
+    await ensureGuestInstructionTables();
+    const payload = await buildGuestInstructionPayload();
+    if (!payload) {
+      return res.status(404).json({ error: "No guest instruction setting found" });
+    }
+    return res.json(payload);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to load instruction settings";
+    return res.status(500).json({ error: message });
+  }
+});
+
+app.get("/api/validate-download", async (req, res) => {
+  try {
+    const { token } = req.query;
+
+    if (!token) {
+      return res.status(400).json({ error: "Missing token" });
+    }
+
+    const result = await queryDb(
+      "SELECT * FROM users WHERE download_token = $1",
+      [token]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Invalid token" });
+    }
+
+    return res.json({ valid: true });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/api/accept-rules", async (req, res) => {
+  try {
+    const token = String(req.body?.token ?? "").trim();
+    if (!token) {
+      return res.status(400).json({ error: "Missing token" });
+    }
+
+    const user = await getUserByToken(token);
+    if (!user) {
+      return res.status(404).json({ error: "Invalid download token" });
+    }
+
+    await setRulesAcceptedForToken(token);
+    await ensureGuestInstructionTables();
+    const settings = await buildGuestInstructionPayload();
+    if (!settings) {
+      return res.status(500).json({ error: "Unable to load instruction settings" });
+    }
+
+    return res.json({ success: true, downloadLink: settings.download_link ?? null });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to accept rules";
+    return res.status(500).json({ error: message });
+  }
+});
+
+app.post("/api/instruction", async (req, res) => {
+  const payload = req.body as Partial<GuestInstructionPayload>;
+  const pool = getDbPool();
+  const client = await pool.connect();
+
+  try {
+    await ensureGuestInstructionTables();
+
+    const presentation = String(payload.presentation ?? "").trim();
+    const availableDays = Array.isArray(payload.available_days)
+      ? payload.available_days.map((day) => String(day).trim()).filter(Boolean)
+      : [];
+    const startDate = String(payload.start_date ?? "").trim();
+    const endDate = String(payload.end_date ?? "").trim();
+    const startTime = toHHMM(payload.start_time);
+    const endTime = toHHMM(payload.end_time);
+    const calendarLink = String(payload.calendar_link ?? "").trim();
+    const downloadLink = String(payload.download_link ?? "").trim();
+    const epicAccountLink = String(payload.epic_account_link ?? "").trim();
+    const steps = normalizeInstructionSteps(payload.steps);
+    const rules = Array.isArray(payload.rules)
+      ? payload.rules
+          .map((row, index) => ({
+            position: Number(row?.position ?? index + 1),
+            rule: String(row?.rule ?? "").trim(),
+          }))
+          .filter((row) => row.rule.length > 0)
+      : [];
+    const supportEmail = String(payload.support_email ?? "").trim();
+    const chatbotLink = String(payload.chatbot_link ?? "").trim();
+
+    await client.query("BEGIN");
+
+    const current = await client.query<{ id: number }>(
+      `SELECT id FROM guest_instruction_settings ORDER BY updated_at DESC NULLS LAST, id DESC LIMIT 1 FOR UPDATE`
+    );
+
+    let settingId: number;
+    if (current.rows[0]?.id) {
+      settingId = current.rows[0].id;
+      await client.query(
+        `
+          UPDATE guest_instruction_settings
+          SET
+            presentation = $2,
+            available_days = $3::text[],
+            start_date = NULLIF($4, '')::date,
+            end_date = NULLIF($5, '')::date,
+            start_time = NULLIF($6, '')::time,
+            end_time = NULLIF($7, '')::time,
+            calendar_link = $8,
+            download_link = $9,
+            epic_account_link = $10,
+            steps = $11::jsonb,
+            support_email = $12,
+            chatbot_link = $13,
+            updated_at = NOW()
+          WHERE id = $1
+        `,
+        [
+          settingId,
+          presentation,
+          availableDays,
+          startDate,
+          endDate,
+          startTime,
+          endTime,
+          calendarLink,
+          downloadLink,
+          epicAccountLink,
+          JSON.stringify(steps),
+          supportEmail,
+          chatbotLink,
+        ]
+      );
+    } else {
+      const inserted = await client.query<{ id: number }>(
+        `
+          INSERT INTO guest_instruction_settings (
+            presentation,
+            available_days,
+            start_date,
+            end_date,
+            start_time,
+            end_time,
+            calendar_link,
+            download_link,
+            epic_account_link,
+            steps,
+            support_email,
+            chatbot_link,
+            updated_at
+          ) VALUES (
+            $1,
+            $2::text[],
+            NULLIF($3, '')::date,
+            NULLIF($4, '')::date,
+            NULLIF($5, '')::time,
+            NULLIF($6, '')::time,
+            $7,
+            $8,
+            $9,
+            $10::jsonb,
+            $11,
+            $12,
+            NOW()
+          )
+          RETURNING id
+        `,
+        [
+          presentation,
+          availableDays,
+          startDate,
+          endDate,
+          startTime,
+          endTime,
+          calendarLink,
+          downloadLink,
+          epicAccountLink,
+          JSON.stringify(steps),
+          supportEmail,
+          chatbotLink,
+        ]
+      );
+      settingId = inserted.rows[0]!.id;
+    }
+
+    await client.query(`DELETE FROM guest_instruction_rules WHERE setting_id = $1`, [settingId]);
+    for (const row of rules.sort((a, b) => a.position - b.position)) {
+      await client.query(
+        `INSERT INTO guest_instruction_rules (setting_id, rule, position) VALUES ($1, $2, $3)`,
+        [settingId, row.rule, row.position]
+      );
+    }
+
+    await client.query("COMMIT");
+
+    const output = await buildGuestInstructionPayload(settingId);
+    return res.json(output);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    const message = error instanceof Error ? error.message : "Failed to save instruction settings";
+    return res.status(500).json({ error: message });
+  } finally {
+    client.release();
+  }
+});
+
 app.put("/api/guest-instruction", async (req, res) => {
   const payload = req.body as Partial<GuestInstructionPayload>;
   const pool = getDbPool();
@@ -1431,6 +2170,8 @@ app.put("/api/guest-instruction", async (req, res) => {
     const availableDays = Array.isArray(payload.available_days)
       ? payload.available_days.map((day) => String(day).trim()).filter(Boolean)
       : [];
+    const startDate = String(payload.start_date ?? "").trim();
+    const endDate = String(payload.end_date ?? "").trim();
     const startTime = toHHMM(payload.start_time);
     const endTime = toHHMM(payload.end_time);
     const calendarLink = String(payload.calendar_link ?? "").trim();
@@ -1461,12 +2202,14 @@ app.put("/api/guest-instruction", async (req, res) => {
           SET
             presentation = $2,
             available_days = $3::text[],
-            start_time = NULLIF($4, '')::time,
-            end_time = NULLIF($5, '')::time,
-            calendar_link = $6,
-            steps = $7::jsonb,
-            support_email = $8,
-            chatbot_link = $9,
+            start_date = NULLIF($4, '')::date,
+            end_date = NULLIF($5, '')::date,
+            start_time = NULLIF($6, '')::time,
+            end_time = NULLIF($7, '')::time,
+            calendar_link = $8,
+            steps = $9::jsonb,
+            support_email = $10,
+            chatbot_link = $11,
             updated_at = NOW()
           WHERE id = $1
         `,
@@ -1474,6 +2217,8 @@ app.put("/api/guest-instruction", async (req, res) => {
           settingId,
           presentation,
           availableDays,
+          startDate,
+          endDate,
           startTime,
           endTime,
           calendarLink,
@@ -1488,6 +2233,8 @@ app.put("/api/guest-instruction", async (req, res) => {
           INSERT INTO guest_instruction_settings (
             presentation,
             available_days,
+            start_date,
+            end_date,
             start_time,
             end_time,
             calendar_link,
@@ -1498,12 +2245,14 @@ app.put("/api/guest-instruction", async (req, res) => {
           ) VALUES (
             $1,
             $2::text[],
-            NULLIF($3, '')::time,
-            NULLIF($4, '')::time,
-            $5,
-            $6::jsonb,
+            NULLIF($3, '')::date,
+            NULLIF($4, '')::date,
+            NULLIF($5, '')::time,
+            NULLIF($6, '')::time,
             $7,
-            $8,
+            $8::jsonb,
+            $9,
+            $10,
             NOW()
           )
           RETURNING id
@@ -1511,6 +2260,8 @@ app.put("/api/guest-instruction", async (req, res) => {
         [
           presentation,
           availableDays,
+          startDate,
+          endDate,
           startTime,
           endTime,
           calendarLink,
@@ -1542,7 +2293,15 @@ app.put("/api/guest-instruction", async (req, res) => {
     client.release();
   }
 });
-
+app.get("/test-email", async (req, res) => {
+  try {
+    await sendInstructionEmail("islemrjab02@gmail.com");
+    res.send("Email envoyé !");
+  } catch (error) {
+    console.error(error);
+    res.status(500).send("Erreur envoi email");
+  }
+});
 app.put("/api/lead-scoring/weights", async (req, res) => {
   try {
     const payload = req.body as unknown;

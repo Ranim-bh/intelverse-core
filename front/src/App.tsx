@@ -5,6 +5,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Layout } from "@/components/Layout";
 import Landing from "./pages/Landing";
 import LeadForm from "./pages/LeadForm";
+import Onboarding from "./pages/Onboarding";
+import Download from "./pages/Download";
 import Dashboard from "./pages/Dashboard";
 import Users from "./pages/Users";
 import Partners from "./pages/Partners";
@@ -25,6 +27,8 @@ const App = () => (
         <Routes>
           <Route path="/landing" element={<Landing />} />
           <Route path="/form" element={<LeadForm />} />
+          <Route path="/onboarding" element={<Onboarding />} />
+          <Route path="/download" element={<Download />} />
 
           <Route path="/" element={<Layout><Dashboard /></Layout>} />
           <Route path="/dashboard" element={<Layout><Dashboard /></Layout>} />

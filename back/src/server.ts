@@ -1824,20 +1824,34 @@ app.patch("/api/requests/:id/:status", async (req, res) => {
 
 app.get("/api/instruction-services", async (_req, res) => {
   try {
-    const services = await queryDb(`
-      SELECT service_name
-      FROM service
-      WHERE service_id IN (
-        SELECT UNNEST(selected_services)
-        FROM guest_instruction_settings
-        WHERE id = 1
-      )
+    const result = await queryDb(`
+      SELECT rule
+      FROM guest_instruction_rules
+      WHERE setting_id = 1
+      ORDER BY position
     `);
 
-    res.json(services.rows);
+    res.json(result.rows);
+
+  } catch (error) {
+    console.error("GET ERROR:", error);
+    res.status(500).json({ error: "Failed to load services" });
+  }
+});
+
+app.get("/api/instruction-settings", async (req, res) => {
+  try {
+    const result = await queryDb(`
+      SELECT presentation
+      FROM guest_instruction_settings
+      LIMIT 1
+    `);
+
+    res.json(result.rows[0]);
+
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: "Failed to load services" });
+    res.status(500).json({ error: "Failed to load presentation" });
   }
 });
 
@@ -1845,16 +1859,31 @@ app.put("/api/instruction-services", async (req, res) => {
   try {
     const { services } = req.body;
 
+    console.log("SERVICES REÇUS:", services);
+
+    // supprimer anciennes instructions
     await queryDb(`
-      UPDATE guest_instruction_settings
-      SET selected_services = $1
-      WHERE id = 1
-    `, [services]);
+      DELETE FROM guest_instruction_rules
+      WHERE setting_id = 1
+    `);
+
+    // créer nouvelles instructions
+    for (let i = 0; i < services.length; i++) {
+      await queryDb(`
+        INSERT INTO guest_instruction_rules (setting_id, rule, position)
+        VALUES ($1, $2, $3)
+      `, [
+        1,
+        `${services[i]}`,
+        i + 1
+      ]);
+    }
 
     res.json({ success: true });
+
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Failed to update services" });
+    console.error("ERROR BACKEND:", error);
+    res.status(500).json({ error: error instanceof Error ? error.message : "Unknown error" });
   }
 });
 

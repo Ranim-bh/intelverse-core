@@ -328,12 +328,13 @@ export default function Settings() {
     return fetch("http://localhost:5000/api/instruction-services")
       .then((res) => res.json())
       .then((data) => {
-        const formatted = data.map((s: any) => s.service_name);
+        const formatted = data.map((s: any) => s.rule);
         console.log("SERVICES FROM DB:", formatted);
         setInstructionServices(formatted);
       })
       .catch((err) => console.error(err));
   };
+  
 
   useEffect(() => {
     loadServices();
@@ -347,6 +348,15 @@ export default function Settings() {
   const [editingRole, setEditingRole] = useState<string | null>(null);
   const [editingService, setEditingService] = useState<string | null>(null);
   const [editingServiceValue, setEditingServiceValue] = useState<string>("");
+  const [presentation, setPresentation] = useState("");
+  useEffect(() => {
+  fetch("http://localhost:5000/api/instruction-settings")
+    .then(res => res.json())
+    .then(data => {
+      setPresentation(data.presentation);
+    })
+    .catch(err => console.error(err));
+}, []);
   const [newServiceName, setNewServiceName] = useState<string>("");
   const [newRoleName, setNewRoleName] = useState<string>("");
   const [isAddRoleModalOpen, setIsAddRoleModalOpen] = useState<boolean>(false);
@@ -357,6 +367,15 @@ export default function Settings() {
   const [isLoadingKpis, setIsLoadingKpis] = useState<boolean>(false);
   const [hasLoadedLeadScoringFromApi, setHasLoadedLeadScoringFromApi] = useState<boolean>(false);
   const [instructionSettings, setInstructionSettings] = useState<InstructionSettings>(loadInstructionSettings());
+  useEffect(() => {
+  if (!instructionSettings.presentation) {
+    setInstructionSettings((prev) => ({
+      ...prev,
+      presentation:
+        "TalentVerse est une plateforme digitale innovante qui se positionne comme un écosystème tout-en-un. Elle connecte l’acquisition de compétences, leur validation vérifiable, le matching avec des opportunités d’emploi ainsi que l’engagement communautaire.",
+    }));
+  }
+}, []);
   const [instructionSaved, setInstructionSaved] = useState<boolean>(false);
   const [isInstructionSaving, setIsInstructionSaving] = useState<boolean>(false);
   const [newInstructionRule, setNewInstructionRule] = useState<string>("");
@@ -414,6 +433,7 @@ const buildAdminAccessPayload = (): AdminAccessMatrixPayload => {
   }));
 
   const matrixByRoleAndServiceId: Record<string, Record<string, boolean>> = {};
+  console.log("MATRIX:", matrixByRoleAndServiceId);
 
   for (const role of roles) {
     matrixByRoleAndServiceId[role.id] = {};
@@ -430,6 +450,9 @@ const buildAdminAccessPayload = (): AdminAccessMatrixPayload => {
     .filter((service) => matrixByRoleAndServiceId[guestRoleId]?.[service.id])
     .map((service) => service.id);
 
+  console.log("SERVICES ENVOYÉS:", selectedServiceIds);
+
+
   fetch("http://localhost:5000/api/instruction-services", {
     method: "PUT",
     headers: {
@@ -437,6 +460,7 @@ const buildAdminAccessPayload = (): AdminAccessMatrixPayload => {
     },
     body: JSON.stringify({
       services: selectedServiceIds,
+
     }),
   })
     .then((res) => {
@@ -1486,6 +1510,9 @@ const buildAdminAccessPayload = (): AdminAccessMatrixPayload => {
               <div className="space-y-5">
                 <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                   <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-5 py-3.5">
+                    <h2 className="text-red-500 font-bold text-lg mb-2">
+                      Bienvenue sur TalentVerse
+                    </h2>
                     <h3 className="text-sm font-semibold text-slate-900">Présentation de TalentVerse</h3>
                     <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700">
                       Modifiable

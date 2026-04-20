@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { churnProfiles } from "@/lib/mock-data";
 import { getRiskColor, getRiskBadgeColor, signalDescriptions } from "@/lib/scoring";
 import { RiskLevel, ChurnProfile } from "@/lib/types";
 import { ShieldAlert, MessageSquare, Bell, Archive, Settings2, TrendingUp } from "lucide-react";
@@ -12,8 +11,10 @@ const riskColumns: { level: RiskLevel; label: string; icon: typeof ShieldAlert }
   { level: 'critical', label: 'Critical', icon: ShieldAlert },
 ];
 
+const mockChurnProfiles: ChurnProfile[] = [];
+
 export default function AntiChurn() {
-  const [profiles, setProfiles] = useState(churnProfiles);
+  const [profiles, setProfiles] = useState(mockChurnProfiles);
   const [showConfig, setShowConfig] = useState(false);
 
   const recovered = profiles.filter(p => p.recovered).length;

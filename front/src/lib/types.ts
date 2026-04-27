@@ -84,7 +84,7 @@ export interface GuestScore {
   offer: string;
 }
 
-export type OfferStatus = 'pending' | 'approved' | 'sent' | 'accepted' | 'rejected';
+export type OfferStatus = 'en_attente' | 'generée' | 'envoyée' | 'acceptée' | 'refusée';
 
 export interface AIOffer {
   id: string;

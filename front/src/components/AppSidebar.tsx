@@ -4,6 +4,7 @@ import {
   Handshake,
   ShieldAlert,
   Sparkles,
+  ClipboardList,
   Settings,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
@@ -26,6 +27,7 @@ const navItems = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
   { title: "Users", url: "/guests", icon: Users },
   { title: "Partenaires", url: "/partners", icon: Handshake },
+  { title: "Requests", url: "/requests", icon: ClipboardList },
   { title: "AI Offers", url: "/ai-offers", icon: Sparkles },
   { title: "Anti-Churn", url: "/anti-churn", icon: ShieldAlert },
   { title: "Settings", url: "/settings", icon: Settings },
